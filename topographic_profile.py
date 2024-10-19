@@ -21,13 +21,13 @@ logger.addHandler(handler)
 class TopographicProfile:
     """Defines the TopographicProfile class."""
 
-    def __init__(self, src_lines: str, src_layer: str, src_name: str, src_rasters: str) -> None:
+    def __init__(self, src_lines: Path, src_layer: str, src_name: str, src_rasters: Path) -> None:
         """Initializes the TopographicProfile class."""
 
-        self.src_lines = Path(src_lines).resolve()
+        self.src_lines = src_lines
         self.src_lines_layer = src_layer
         self.src_lines_name = src_name
-        self.src_rasters = Path(src_rasters).resolve()
+        self.src_rasters = src_rasters
         self.dst = self.src_lines.parent / "topographic_profile"
         self.crs = "EPSG:3043"
         self.nodata = -99999
@@ -163,7 +163,7 @@ class TopographicProfile:
 @click.argument("src_layer", type=click.STRING)
 @click.argument("src_name", type=click.STRING)
 @click.argument("src_rasters", type=click.Path(exists=True, file_okay=False, dir_okay=True, resolve_path=True))
-def main(src_lines: str, src_layer: str, src_name: str, src_rasters: str) -> None:
+def main(src_lines: Path, src_layer: str, src_name: str, src_rasters: Path) -> None:
     """
     \b
     Description: For one or more LineStrings representing the path of the desired topographic profile(s), a sequence of
@@ -186,10 +186,10 @@ def main(src_lines: str, src_layer: str, src_name: str, src_rasters: str) -> Non
           point interpolated along the LineStrings will fail to intersect an input raster.
 
     \b
-    :param str src_lines: source GeoPackage.
+    :param Path src_lines: source GeoPackage.
     :param str src_layer: layer containing one or more LineStrings within the source GeoPackage.
     :param str src_name: layer column used to uniquely identify each row and form the name of the output .csv.
-    :param str src_rasters: directory containing one or more GeoTIFF DTM rasters.
+    :param Path src_rasters: directory containing one or more GeoTIFF DTM rasters.
     """
 
     try:
