@@ -32,7 +32,7 @@ class TopographicProfile:
         self.crs = "EPSG:3043"
         self.nodata = -99999
 
-        # Compile src data.
+        # Compile source data.
         logger.info(f"Compiling source data - LineStrings: {self.src_lines}, layer={self.src_lines_layer}")
         self.lines = gpd.read_file(self.src_lines, layer=self.src_lines_layer)
 
@@ -159,10 +159,12 @@ class TopographicProfile:
 
 
 @click.command()
-@click.argument("src_lines", type=click.Path(exists=True, file_okay=True, dir_okay=False, resolve_path=True))
+@click.argument("src_lines",
+                type=click.Path(exists=True, file_okay=True, dir_okay=False, resolve_path=True, path_type=Path))
 @click.argument("src_layer", type=click.STRING)
 @click.argument("src_name", type=click.STRING)
-@click.argument("src_rasters", type=click.Path(exists=True, file_okay=False, dir_okay=True, resolve_path=True))
+@click.argument("src_rasters",
+                type=click.Path(exists=True, file_okay=False, dir_okay=True, resolve_path=True, path_type=Path))
 def main(src_lines: Path, src_layer: str, src_name: str, src_rasters: Path) -> None:
     """
     \b
@@ -186,10 +188,10 @@ def main(src_lines: Path, src_layer: str, src_name: str, src_rasters: Path) -> N
           point interpolated along the LineStrings will fail to intersect an input raster.
 
     \b
-    :param Path src_lines: source GeoPackage.
-    :param str src_layer: layer containing one or more LineStrings within the source GeoPackage.
-    :param str src_name: layer column used to uniquely identify each row and form the name of the output .csv.
-    :param Path src_rasters: directory containing one or more GeoTIFF DTM rasters.
+    :param Path src_lines: Source GeoPackage.
+    :param str src_layer: Layer containing one or more LineStrings within the source GeoPackage.
+    :param str src_name: Layer column used to uniquely identify each row and form the name of the output .csv.
+    :param Path src_rasters: Directory containing one or more GeoTIFF DTM rasters.
     """
 
     try:
