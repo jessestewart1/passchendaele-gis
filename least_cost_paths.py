@@ -4,10 +4,10 @@ import logging
 import networkx as nx
 import pandas as pd
 import sys
-from itertools import product
+from itertools import chain, product
 from operator import attrgetter, itemgetter
 from pathlib import Path
-from shapely import Point
+from shapely import LineString, Point
 from tqdm import tqdm
 
 # Set logger.
@@ -31,7 +31,7 @@ class LeastCostPaths:
         self.crs = "EPSG:3043"
         self.dst = src_nodes / "least_cost_paths.gpkg"
         self.dst_layer = "least_cost_paths"
-        self.results = pd.DataFrame()
+        self.results = gpd.GeoDataFrame(geometry=gpd.GeoSeries(), crs=self.crs)
         self.pt_pairs = pd.DataFrame()
         self.graph = nx.DiGraph()
 
@@ -111,13 +111,37 @@ class LeastCostPaths:
     def export(self) -> None:
         """Construct and export output dataset."""
 
-        logger.info("Compiling geometries associated with each collection of least-cost path node indexes.")
+        logger.info("Compiling geometries associated with each least-cost path.")
 
-        # TODO - export least cost paths as start pt (idx), destination pt (idx), geometry (linestring), total cost.
+        # Create node index - point lookup dict using only relevant indexes (those encountered from least-cost paths).
+        indexes = set(chain.from_iterable(self.results["indexes"]))
+        lookup_df = self.src_index_pt_lookup.loc[self.src_index_pt_lookup[self.field_lookup_index].isin(indexes)]
+        lookup = dict(zip(lookup_df[self.field_lookup_index],
+                          lookup_df[[self.field_lookup_x, self.field_lookup_y]].apply(dict, axis=1)
+                          .map(lambda row: Point(row[self.field_lookup_x], row[self.field_lookup_y]))))
+
+        # Compile geometries associated with each least-cost path index collection.
+        self.results["geometry"] = (self.results["indexes"]
+                                    .map(lambda indexes: map(lambda idx: lookup[idx], indexes))
+                                    .map(LineString))
+
+        logger.info("Compiling total weights associated with each least-cost path.")
+
+        # Compile total costs from edges using NetworkX path_graph.
+        self.results["cost"] = (self.results["indexes"]
+                                .map(lambda indexes: nx.path_graph(indexes).edges())
+                                .map(lambda edges: map(lambda edge: self.graph.edges()[edge][self.field_cost], edges))
+                                .map(sum))
+
+        logger.info("Construct output dataset schema.")
+
+        # Compile remaining attributes for output dataset - source and target node indexes.
+        self.results["source_index"] = self.results["indexes"].map(itemgetter(0))
+        self.results["target_index"] = self.results["indexes"].map(itemgetter(-1))
 
         # Export to GeoPackage.
         logger.info(f"Exporting results to: {self.dst}, layer={self.dst_layer}.")
-        self.results.to_file(self.dst, layer=self.dst_layer)
+        self.results[["source_index", "target_index", "cost", "geometry"]].to_file(self.dst, layer=self.dst_layer)
         logger.info(f"Successfully exported results to: {self.dst}, layer={self.dst_layer}.")
 
     def permute_pt_pairs(self) -> None:
@@ -179,7 +203,7 @@ def main(src_nodes: Path, field_index_source: str, field_index_target: str, fiel
         - All spatial data is in the same, meter-based projection.
         - All start / destination points match node coordinates added to the DiGraph.
         - All start / destination points' named groups exist in each file.
-        - The collection of node pairs added to the DiGraph as edges does not form any subgraphs (disconnected areas).
+        - All permutations of start / destination pairs can be reached using the DiGraph.
         - The collection of node pairs added to the DiGraph as edges does not contain any negative cost values.
         - All input CSVs have headers as the first row and comma (,) as the delimiter.
 
