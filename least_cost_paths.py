@@ -54,7 +54,7 @@ class LeastCostPaths:
 
         # Compile source data - node index-cost pairs.
         logger.info(f"Compiling source data - node index-cost pairs: {src_nodes}.")
-        self.src_nodes = pd.read_csv(src_nodes, sep=",", header=True)
+        self.src_nodes = pd.read_csv(src_nodes, sep=",", header=0)
         logger.info(f"Successfully loaded {len(self.src_nodes)} records.")
 
         # Compile source data - source points.
@@ -69,7 +69,7 @@ class LeastCostPaths:
 
         # Compile source data - index-pt lookup.
         logger.info(f"Compiling source data - index-pt lookup: {src_index_pt_lookup}.")
-        self.src_index_pt_lookup = pd.read_csv(src_index_pt_lookup, sep=",", header=True)
+        self.src_index_pt_lookup = pd.read_csv(src_index_pt_lookup, sep=",", header=0)
         logger.info(f"Successfully loaded {len(self.src_index_pt_lookup)} records.")
 
     def __call__(self) -> None:
@@ -84,6 +84,7 @@ class LeastCostPaths:
         """Calculates least-cost paths for each point pair."""
 
         logger.info("Calculating least-cost paths.")
+        self.results = self.src_nodes.copy(deep=True)
         self.results["indexes"] = None
 
         # Batch process least-cost path calculation using specific chunk size.
@@ -173,7 +174,7 @@ class LeastCostPaths:
             pts_source_, pts_target_ = zip(*product(pts_source, pts_target))
             pt_pairs.append(pd.DataFrame({"group": group, "source": pts_source_, "target": pts_target_}))
 
-            logger.info(f"Compiled {len(self.pt_pairs[group])} source / target pairs for group: {group}.")
+            logger.info(f"Compiled {len(pt_pairs[-1])} source / target pairs for group: {group}.")
 
         # Concatenate all permutations into single DataFrame.
         self.pt_pairs = pd.concat(pt_pairs, axis=0, ignore_index=True)
