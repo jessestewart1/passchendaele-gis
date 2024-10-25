@@ -84,7 +84,7 @@ class LeastCostPaths:
         """Calculates least-cost paths for each point pair."""
 
         logger.info("Calculating least-cost paths.")
-        self.results = self.src_nodes.copy(deep=True)
+        self.results = self.pt_pairs.copy(deep=True)
         self.results["indexes"] = None
 
         # Batch process least-cost path calculation using specific chunk size.
