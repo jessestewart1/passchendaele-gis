@@ -5,7 +5,6 @@ import pandas as pd
 import sys
 from igraph import Graph
 from itertools import chain, product
-from operator import itemgetter
 from pathlib import Path
 from shapely import LineString, Point
 from tqdm import tqdm
@@ -93,11 +92,8 @@ class LeastCostPaths:
             flag = (self.results.index >= (idx * chunksize)) & (self.results.index < ((idx + 1) * chunksize))
 
             # Calculate least-cost paths using Dijkstra's algorithm.
-            self.results.loc[flag, "indexes"] = self.results.loc[flag, [self.field_index_source,
-                                                                        self.field_index_target]].apply(dict, axis=1)\
-                .map(lambda row: self.graph.get_shortest_path(v=row[self.field_index_source],
-                                                              to=row[self.field_index_target],
-                                                              weights="weight",
+            self.results.loc[flag, "indexes"] = self.results.loc[flag, ["source", "target"]].apply(dict, axis=1)\
+                .map(lambda row: self.graph.get_shortest_path(v=row["source"], to=row["target"], weights="weight",
                                                               mode="out", output="vpath", algorithm="dijkstra"))
 
     def create_graph(self) -> None:
@@ -144,15 +140,9 @@ class LeastCostPaths:
                                 .map(lambda eids: map(lambda eid: self.graph.es[eid]["weight"], eids))
                                 .map(sum))
 
-        logger.info("Construct output dataset - Compiling source / target node indexes.")
-
-        # Compile source and target node indexes.
-        self.results["source_index"] = self.results["indexes"].map(itemgetter(0))
-        self.results["target_index"] = self.results["indexes"].map(itemgetter(-1))
-
         # Export to GeoPackage.
         logger.info(f"Exporting results to: {self.dst}, layer={self.dst_layer}.")
-        self.results[["source_index", "target_index", "cost", "geometry"]].to_file(self.dst, layer=self.dst_layer)
+        self.results[["source", "target", "cost", "geometry"]].to_file(self.dst, layer=self.dst_layer)
         logger.info(f"Successfully exported results to: {self.dst}, layer={self.dst_layer}.")
 
     def permute_pt_pairs(self) -> None:
