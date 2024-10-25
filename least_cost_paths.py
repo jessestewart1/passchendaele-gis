@@ -97,7 +97,7 @@ class LeastCostPaths:
                                                                         self.field_index_target]].apply(dict, axis=1)\
                 .map(lambda row: self.graph.get_shortest_path(v=row[self.field_index_source],
                                                               to=row[self.field_index_target],
-                                                              weights=self.field_cost,
+                                                              weights="weight",
                                                               mode="out", output="vpath", algorithm="dijkstra"))
 
     def create_graph(self) -> None:
