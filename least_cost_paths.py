@@ -83,7 +83,10 @@ class LeastCostPaths:
         """Calculates least-cost paths for each point pair."""
 
         logger.info("Calculating least-cost paths.")
-        self.results = self.pt_pairs.copy(deep=True)
+
+        # Populate results GeoDataFrame with source and target indexes from point pairs.
+        self.results["source"] = self.pt_pairs["source"]
+        self.results["target"] = self.pt_pairs["target"]
         self.results["indexes"] = None
 
         # Batch process least-cost path calculation using specific chunk size.
