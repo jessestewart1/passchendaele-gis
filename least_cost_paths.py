@@ -23,12 +23,13 @@ class LeastCostPaths:
 
     def __init__(self, src_nodes: Path, field_index_source: str, field_index_target: str, field_cost: str,
                  src_pts: Path, layer_pts_source: str, layer_pts_target: str, field_pt_index: str, field_pt_group: str,
-                 src_index_pt_lookup: Path, field_lookup_index: str, field_lookup_x: str, field_lookup_y: str) -> None:
+                 src_index_pt_lookup: Path, field_lookup_index: str, field_lookup_x: str, field_lookup_y: str,
+                 dst_name: str) -> None:
         """Initializes the LeastCostPaths class."""
 
         self.crs = "EPSG:3043"
-        self.dst = src_nodes / "least_cost_paths.gpkg"
-        self.dst_layer = "least_cost_paths"
+        self.dst = src_nodes.parent / f"least_cost_paths.gpkg"
+        self.dst_layer = dst_name
         self.results = gpd.GeoDataFrame(geometry=gpd.GeoSeries(), crs=self.crs)
         self.pt_pairs = pd.DataFrame()
         self.graph = Graph(directed=True)
@@ -54,22 +55,22 @@ class LeastCostPaths:
         # Compile source data - node index-cost pairs.
         logger.info(f"Compiling source data - node index-cost pairs: {src_nodes}.")
         self.src_nodes = pd.read_csv(src_nodes, sep=",", header=0)
-        logger.info(f"Successfully loaded {len(self.src_nodes)} records.")
+        logger.info(f"Successfully loaded {len(self.src_nodes):,} records.")
 
         # Compile source data - source points.
         logger.info(f"Compiling source data - source points: {src_pts}, layer={layer_pts_source}.")
         self.src_pts_source = gpd.read_file(src_pts, layer=layer_pts_source)
-        logger.info(f"Successfully loaded {len(self.src_pts_source)} records.")
+        logger.info(f"Successfully loaded {len(self.src_pts_source):,} records.")
 
         # Compile source data - target points.
         logger.info(f"Compiling source data - target points: {src_pts}, layer={layer_pts_target}.")
         self.src_pts_target = gpd.read_file(src_pts, layer=layer_pts_target)
-        logger.info(f"Successfully loaded {len(self.src_pts_target)} records.")
+        logger.info(f"Successfully loaded {len(self.src_pts_target):,} records.")
 
         # Compile source data - index-pt lookup.
         logger.info(f"Compiling source data - index-pt lookup: {src_index_pt_lookup}.")
         self.src_index_pt_lookup = pd.read_csv(src_index_pt_lookup, sep=",", header=0)
-        logger.info(f"Successfully loaded {len(self.src_index_pt_lookup)} records.")
+        logger.info(f"Successfully loaded {len(self.src_index_pt_lookup):,} records.")
 
     def __call__(self) -> None:
         """Executes the LeastCostPaths class."""
@@ -84,9 +85,10 @@ class LeastCostPaths:
 
         logger.info("Calculating least-cost paths.")
 
-        # Populate results GeoDataFrame with source and target indexes from point pairs.
-        self.results["source"] = self.pt_pairs["source"]
-        self.results["target"] = self.pt_pairs["target"]
+        # Populate results GeoDataFrame with source and target indexes and group names from point pairs.
+        for field in ("source", "target", "group"):
+            self.results[field] = self.pt_pairs[field]
+
         self.results["indexes"] = None
 
         # Batch process least-cost path calculation using specific chunk size.
@@ -115,7 +117,8 @@ class LeastCostPaths:
         # Add weights to Graph.
         self.graph.es["weight"] = self.src_nodes[self.field_cost]
 
-        logger.info(f"Successfully created Graph of size: nodes={self.graph.vcount()}, edges={self.graph.ecount()}.")
+        logger.info(f"Successfully created Graph of size: nodes={self.graph.vcount():,}, "
+                    f"edges={self.graph.ecount():,}.")
 
     def export(self) -> None:
         """Construct and export output dataset."""
@@ -143,9 +146,15 @@ class LeastCostPaths:
                                 .map(lambda eids: map(lambda eid: self.graph.es[eid]["weight"], eids))
                                 .map(sum))
 
+        logger.info("Constructing output dataset - Compiling distance totals.")
+
+        # Compile total distance from geometry lengths.
+        self.results["distance"] = self.results.length
+
         # Export to GeoPackage.
         logger.info(f"Exporting results to: {self.dst}, layer={self.dst_layer}.")
-        self.results[["source", "target", "cost", "geometry"]].to_file(self.dst, layer=self.dst_layer)
+        self.results[["group", "source", "target", "cost", "distance", "geometry"]].to_file(self.dst,
+                                                                                            layer=self.dst_layer)
         logger.info(f"Successfully exported results to: {self.dst}, layer={self.dst_layer}.")
 
     def permute_pt_pairs(self) -> None:
@@ -190,17 +199,24 @@ class LeastCostPaths:
 @click.argument("field_lookup_index", type=click.STRING)
 @click.argument("field_lookup_x", type=click.STRING)
 @click.argument("field_lookup_y", type=click.STRING)
+@click.argument("dst_name", type=click.STRING)
 def main(src_nodes: Path, field_index_source: str, field_index_target: str, field_cost: str, src_pts: Path,
          layer_pts_source: str, layer_pts_target: str, field_pt_index: str, field_pt_group: str,
-         src_index_pt_lookup: Path, field_lookup_index: str, field_lookup_x: str, field_lookup_y: str) -> None:
+         src_index_pt_lookup: Path, field_lookup_index: str, field_lookup_x: str, field_lookup_y: str, dst_name: str
+         ) -> None:
     """
     \b
     Description: Creates an igraph directed Graph from a set of node index pairs as edges, with associated cost values.
     For each permutation of source and target points within each named group of source and target points, calculates
-    the least-cost path along the Graph, using the cost values as the weight. Outputs a GeoPackage,
-    'least_cost_paths.gpkg' | layer='least_cost_paths', within the same directory as `src_nodes` input containing for
-    each least-cost path: least-cost path geometry (LineString), source point index, target point index, total cost,
-    and source / target point group name.
+    the least-cost path along the Graph, using the cost values as the weight. Outputs a new layer to GeoPackage
+    'least_cost_paths.gpkg', based on a given name, within the same directory as `src_nodes` containing the following
+    attributes for each least-cost path:
+        - group: Group name of source / target point pair.
+        - source: Index of source point.
+        - target: Index of target point.
+        - cost: Sum of weights for least-cost path.
+        - distance: Least-cost path geometry length.
+        - geometry: Least-cost path geometry (LineString).
 
     \b
     Assumptions:
@@ -228,13 +244,15 @@ def main(src_nodes: Path, field_index_source: str, field_index_target: str, fiel
     :param str field_lookup_index: Lookup field containing node indexes.
     :param str field_lookup_x: Lookup field containing node longitude (x) values.
     :param str field_lookup_y: Lookup field containing node latitude (y) values.
+    :param str dst_name: Output GeoPackage layer name.
     """
 
     try:
 
         least_cost_paths = LeastCostPaths(src_nodes, field_index_source, field_index_target, field_cost, src_pts,
                                           layer_pts_source, layer_pts_target, field_pt_index, field_pt_group,
-                                          src_index_pt_lookup, field_lookup_index, field_lookup_x, field_lookup_y)
+                                          src_index_pt_lookup, field_lookup_index, field_lookup_x, field_lookup_y,
+                                          dst_name)
         least_cost_paths()
 
     except KeyboardInterrupt:
