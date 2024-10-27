@@ -140,16 +140,16 @@ class LeastCostPaths:
         logger.info("Constructing output dataset - Compiling cost totals.")
 
         # Compile total costs from edges using edge IDs.
-        self.results["cost"] = (self.results["indexes"]
-                                .map(lambda idxs: zip(idxs[:-1], idxs[1:]))
-                                .map(lambda idxs: map(lambda idxs_: self.graph.get_eid(*idxs_), idxs))
-                                .map(lambda eids: map(lambda eid: self.graph.es[eid]["weight"], eids))
-                                .map(sum))
+        self.results["cost"] = pd.Series(self.results["indexes"]
+                                         .map(lambda idxs: zip(idxs[:-1], idxs[1:]))
+                                         .map(lambda idxs: map(lambda idxs_: self.graph.get_eid(*idxs_), idxs))
+                                         .map(lambda eids: map(lambda eid: self.graph.es[eid]["weight"], eids))
+                                         .map(sum)).round(6)
 
         logger.info("Constructing output dataset - Compiling distance totals.")
 
         # Compile total distance from geometry lengths.
-        self.results["distance"] = self.results.length
+        self.results["distance"] = self.results.length.round(6)
 
         # Export to GeoPackage.
         logger.info(f"Exporting results to: {self.dst}, layer={self.dst_layer}.")
@@ -158,15 +158,15 @@ class LeastCostPaths:
         logger.info(f"Successfully exported results to: {self.dst}, layer={self.dst_layer}.")
 
     def permute_pt_pairs(self) -> None:
-        """Permutes each source / target point pair within each named group."""
+        """Permutes each source - target point pair within each named group."""
 
-        logger.info("Permuting source / target point pairs.")
+        logger.info("Permuting source - target point pairs.")
         pt_pairs = list()
 
         # Iterate named groups.
         for group in set(self.src_pts_source[self.field_pt_group]):
 
-            # Compile source / target indexes.
+            # Compile source and target indexes.
             pts_source = set(self.src_pts_source.loc[self.src_pts_source[self.field_pt_group] == group,
                                                      self.field_pt_index])
             pts_target = set(self.src_pts_target.loc[self.src_pts_target[self.field_pt_group] == group,
@@ -176,7 +176,7 @@ class LeastCostPaths:
             pts_source_, pts_target_ = zip(*product(pts_source, pts_target))
             pt_pairs.append(pd.DataFrame({"group": group, "source": pts_source_, "target": pts_target_}))
 
-            logger.info(f"Compiled {len(pt_pairs[-1])} source / target pairs for group: {group}.")
+            logger.info(f"Compiled {len(pt_pairs[-1])} source - target pairs for group: {group}.")
 
         # Concatenate all permutations into single DataFrame.
         self.pt_pairs = pd.concat(pt_pairs, axis=0, ignore_index=True)
@@ -211,7 +211,7 @@ def main(src_nodes: Path, field_index_source: str, field_index_target: str, fiel
     the least-cost path along the Graph, using the cost values as the weight. Outputs a new layer to GeoPackage
     'least_cost_paths.gpkg', based on a given name, within the same directory as `src_nodes` containing the following
     attributes for each least-cost path:
-        - group: Group name of source / target point pair.
+        - group: Group name of source - target point pair.
         - source: Index of source point.
         - target: Index of target point.
         - cost: Sum of weights for least-cost path.
@@ -221,9 +221,9 @@ def main(src_nodes: Path, field_index_source: str, field_index_target: str, fiel
     \b
     Assumptions:
         - All spatial data is in the same, meter-based projection.
-        - All source / target points match node coordinates added to the Graph.
-        - All source / target points' named groups exist in each file.
-        - All permutations of source / target pairs can be reached using the Graph.
+        - All source and target points match node coordinates added to the Graph.
+        - All source and target points have named groups that exist in the other.
+        - All permutations of source - target pairs can be reached using the Graph.
         - The collection of node pairs added to the Graph as edges does not contain any negative cost values.
         - All input CSVs have headers as the first row and comma (,) as the delimiter.
 
@@ -238,8 +238,8 @@ def main(src_nodes: Path, field_index_source: str, field_index_target: str, fiel
         names used to group sets of points.
     :param str layer_pts_target: GeoPackage layer containing target point geometries, associated node indexes, and
         names used to group sets of points.
-    :param str field_pt_index: Field containing geometry-node indexes for source / target point layers.
-    :param str field_pt_group: Field containing point group names for source / target point layers.
+    :param str field_pt_index: Field containing geometry-node indexes for source and target point layers.
+    :param str field_pt_group: Field containing point group names for source and target point layers.
     :param Path src_index_pt_lookup: CSV (.csv) containing lookup data for node indexes and their geometry coordinates.
     :param str field_lookup_index: Lookup field containing node indexes.
     :param str field_lookup_x: Lookup field containing node longitude (x) values.
