@@ -91,15 +91,16 @@ class LeastCostPaths:
 
         self.results["indexes"] = None
 
-        # Batch process least-cost path calculation using specific chunk size.
-        chunksize = 100
-        for idx in tqdm(range(int(len(self.results) / chunksize) + 1)):
-            flag = (self.results.index >= (idx * chunksize)) & (self.results.index < ((idx + 1) * chunksize))
+        # Iteratively calculate least-cost paths.
+        # Note: Vectorization not supported for igraph.
+        for idx in tqdm(range(len(self.results))):
+
+            # Compile input values.
+            index_source, index_target = self.results.iloc[idx][["source", "target"]]
 
             # Calculate least-cost paths using Dijkstra's algorithm.
-            self.results.loc[flag, "indexes"] = self.results.loc[flag, ["source", "target"]].apply(dict, axis=1)\
-                .map(lambda row: self.graph.get_shortest_path(v=row["source"], to=row["target"], weights="weight",
-                                                              mode="out", output="vpath", algorithm="dijkstra"))
+            self.results.loc[self.results.index == idx, "indexes"] = self.graph.get_shortest_path(
+                v=index_source, to=index_target, weights="weight", mode="out", output="vpath", algorithm="dijkstra")
 
     def create_graph(self) -> None:
         """Creates a directed Graph from a collection of node indexes and cost values."""
