@@ -96,7 +96,8 @@ class LeastCostPaths:
         for idx in tqdm(range(len(self.results))):
 
             # Compile input values.
-            index_source, index_target = self.results.at[idx, ["source", "target"]]
+            index_source = self.results.at[idx, "source"]
+            index_target = self.results.at[idx, "target"]
             print(index_source)
             print(index_target)
             print(self.results.loc[self.results.index == idx])
