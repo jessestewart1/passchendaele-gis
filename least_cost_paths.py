@@ -153,7 +153,11 @@ class LeastCostPaths:
         self.results["distance"] = self.results.length.round(6)
 
         # Export to GeoPackage.
+        # TODO - remove request to write to output.
         logger.info(f"Exporting results to: {self.dst}, layer={self.dst_layer}.")
+        response = "n"
+        while response != "y":
+            response = input("write output [y/n]?").lower()
         self.results[["group", "source", "target", "cost", "distance", "geometry"]].to_file(self.dst,
                                                                                             layer=self.dst_layer)
         logger.info(f"Successfully exported results to: {self.dst}, layer={self.dst_layer}.")
