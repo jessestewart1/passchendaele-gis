@@ -97,6 +97,9 @@ class LeastCostPaths:
 
             # Compile input values.
             index_source, index_target = self.results.iloc[idx][["source", "target"]]
+            print(index_source)
+            print(index_target)
+            print(self.results.loc[self.results.index == idx])
 
             # Calculate least-cost paths using Dijkstra's algorithm.
             self.results.loc[self.results.index == idx, "indexes"] = self.graph.get_shortest_path(
