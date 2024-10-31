@@ -98,14 +98,10 @@ class LeastCostPaths:
             # Compile input values.
             index_source = self.results.at[idx, "source"]
             index_target = self.results.at[idx, "target"]
-            print(index_source)
-            print(index_target)
-            print(self.results.loc[self.results.index == idx])
 
             # Calculate least-cost paths using Dijkstra's algorithm.
             self.results.at[idx, "indexes"] = self.graph.get_shortest_path(
                 v=index_source, to=index_target, weights="weight", mode="out", output="vpath", algorithm="dijkstra")
-            print(self.results.at[idx, "indexes"])
 
     def create_graph(self) -> None:
         """Creates a directed Graph from a collection of node indexes and cost values."""
