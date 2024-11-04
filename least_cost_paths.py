@@ -24,7 +24,7 @@ class LeastCostPaths:
     def __init__(self, src_nodes: Path, field_index_source: str, field_index_target: str, field_cost: str,
                  src_pts: Path, layer_pts_source: str, layer_pts_target: str, field_pt_index: str, field_pt_group: str,
                  src_index_pt_lookup: Path, field_lookup_index: str, field_lookup_x: str, field_lookup_y: str,
-                 dst_name: str) -> None:
+                 dst_name: str, pts_index_start: int = -1, pts_index_end: int = -1) -> None:
         """Initializes the LeastCostPaths class."""
 
         self.crs = "EPSG:3043"
@@ -32,6 +32,8 @@ class LeastCostPaths:
         self.dst_layer = dst_name
         self.results = gpd.GeoDataFrame(geometry=gpd.GeoSeries(), crs=self.crs)
         self.pt_pairs = pd.DataFrame()
+        self.pts_index_start = pts_index_start
+        self.pts_index_end = pts_index_end
         self.graph = Graph(directed=True)
 
         # Define variables for nodes-cost source.
@@ -187,6 +189,16 @@ class LeastCostPaths:
         # Concatenate all permutations into single DataFrame.
         self.pt_pairs = pd.concat(pt_pairs, axis=0, ignore_index=True)
 
+        # Subset point pairs, if required.
+        if (self.pts_index_start >= 0) and (self.pts_index_end > self.pts_index_start):
+
+            self.pt_pairs = self.pt_pairs.loc[(self.pt_pairs.index >= self.pts_index_start) &
+                                              (self.pt_pairs.index <= self.pts_index_end)].copy(deep=True)
+            self.pt_pairs.reset_index(drop=True, inplace=True)
+
+            logger.info(f"Source - target point pairs subset to indexes: {self.pts_index_start} - {self.pts_index_end} "
+                        f"(inclusively).")
+
 
 @click.command()
 @click.argument("src_nodes",
@@ -206,10 +218,12 @@ class LeastCostPaths:
 @click.argument("field_lookup_x", type=click.STRING)
 @click.argument("field_lookup_y", type=click.STRING)
 @click.argument("dst_name", type=click.STRING)
+@click.option("pts_index_start", type=click.INT, default=-1, show_default=True)
+@click.option("pts_index_end", type=click.INT, default=-1, show_default=True)
 def main(src_nodes: Path, field_index_source: str, field_index_target: str, field_cost: str, src_pts: Path,
          layer_pts_source: str, layer_pts_target: str, field_pt_index: str, field_pt_group: str,
-         src_index_pt_lookup: Path, field_lookup_index: str, field_lookup_x: str, field_lookup_y: str, dst_name: str
-         ) -> None:
+         src_index_pt_lookup: Path, field_lookup_index: str, field_lookup_x: str, field_lookup_y: str, dst_name: str,
+         pts_index_start: int = -1, pts_index_end: int = -1) -> None:
     """
     \b
     Description: Creates an igraph directed Graph from a set of node index pairs as edges, with associated cost values.
@@ -251,6 +265,10 @@ def main(src_nodes: Path, field_index_source: str, field_index_target: str, fiel
     :param str field_lookup_x: Lookup field containing node longitude (x) values.
     :param str field_lookup_y: Lookup field containing node latitude (y) values.
     :param str dst_name: Output GeoPackage layer name.
+    :param int pts_index_start: Starting index of grouped point pairs to be processed (inclusive; allows subsetting of
+        results).
+    :param int pts_index_end: Ending index of grouped point pairs to be processed (inclusive; allows subsetting of
+        results).
     """
 
     try:
@@ -258,7 +276,7 @@ def main(src_nodes: Path, field_index_source: str, field_index_target: str, fiel
         least_cost_paths = LeastCostPaths(src_nodes, field_index_source, field_index_target, field_cost, src_pts,
                                           layer_pts_source, layer_pts_target, field_pt_index, field_pt_group,
                                           src_index_pt_lookup, field_lookup_index, field_lookup_x, field_lookup_y,
-                                          dst_name)
+                                          dst_name, pts_index_start, pts_index_end)
         least_cost_paths()
 
     except KeyboardInterrupt:
