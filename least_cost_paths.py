@@ -218,8 +218,8 @@ class LeastCostPaths:
 @click.argument("field_lookup_x", type=click.STRING)
 @click.argument("field_lookup_y", type=click.STRING)
 @click.argument("dst_name", type=click.STRING)
-@click.option("pts_index_start", type=click.INT, default=-1, show_default=True)
-@click.option("pts_index_end", type=click.INT, default=-1, show_default=True)
+@click.option("--pts_index_start", type=click.INT, default=-1, show_default=True)
+@click.option("--pts_index_end", type=click.INT, default=-1, show_default=True)
 def main(src_nodes: Path, field_index_source: str, field_index_target: str, field_cost: str, src_pts: Path,
          layer_pts_source: str, layer_pts_target: str, field_pt_index: str, field_pt_group: str,
          src_index_pt_lookup: Path, field_lookup_index: str, field_lookup_x: str, field_lookup_y: str, dst_name: str,
