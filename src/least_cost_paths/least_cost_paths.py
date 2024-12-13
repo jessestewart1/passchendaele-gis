@@ -28,7 +28,7 @@ class LeastCostPaths:
         """Initializes the LeastCostPaths class."""
 
         self.crs = "EPSG:3043"
-        self.dst = src_nodes.parent / f"least_cost_paths.gpkg"
+        self.dst = src_nodes.parent / "least_cost_paths.gpkg"
         self.dst_layer = dst_name
         self.results = gpd.GeoDataFrame(geometry=gpd.GeoSeries(), crs=self.crs)
         self.pt_pairs = pd.DataFrame()
@@ -156,13 +156,9 @@ class LeastCostPaths:
         self.results["distance"] = self.results.length.round(6)
 
         # Export to GeoPackage.
-        # TODO - remove request to write to output.
         logger.info(f"Exporting results to: {self.dst}, layer={self.dst_layer}.")
-        response = "n"
-        while response != "y":
-            response = input("write output [y/n]?").lower()
-        self.results[["group", "source", "target", "cost", "distance", "geometry"]].to_file(self.dst,
-                                                                                            layer=self.dst_layer)
+        self.results[["group", "source", "target", "cost", "distance", "geometry"]]\
+            .to_file(self.dst, layer=self.dst_layer)
         logger.info(f"Successfully exported results to: {self.dst}, layer={self.dst_layer}.")
 
     def permute_pt_pairs(self) -> None:
