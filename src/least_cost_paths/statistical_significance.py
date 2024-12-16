@@ -1,10 +1,11 @@
 import click
-import geopandas as gpd
 import logging
 import numpy as np
 import pandas as pd
 import sys
 from pathlib import Path
+from scipy.linalg import svd
+from scipy.stats import pearsonr
 from sqlalchemy import create_engine
 
 # Set logger.
@@ -36,10 +37,6 @@ class StatisticalSignificance:
         logger.info(f"Compiling source data - least-cost paths uniform: {src}, layer={layer_sps}.")
         self.sps = pd.read_sql(f"select {query_fields} from \"{layer_sps}\"", con=engine)
 
-        # Sort DataFrames to ensure alignment.
-        self.lcps.sort_values(by=["group", "source", "target"], ignore_index=True, inplace=True)
-        self.sps.sort_values(by=["group", "source", "target"], ignore_index=True, inplace=True)
-
         # Configure output DataFrame.
         groups = list(set(self.lcps["group"]))
         self.pvalues = pd.DataFrame({"group": groups, "pvalue": [-1] * len(groups)})
@@ -53,41 +50,101 @@ class StatisticalSignificance:
         self.pvalues.to_csv(self.dst, sep=",", header=True, index=False)
         logger.info(f"Exported results to: {self.dst}.")
 
+    @staticmethod
+    def _gen_cd_matrix(df: pd.DataFrame, cost: str) -> np.ndarray:
+        """
+        Generates a cost-distance matrix from a DataFrame.
+
+        :param pd.DataFrame df: DataFrame containing source locations, target locations, and cost values.
+        :param str cost: Field name containing cost values.
+        :return np.ndarray: Cost-distance matrix.
+        """
+
+        logger.info(f"Generating cost-distance matrix using cost field: {cost}.")
+
+        # Sort DataFrame to ensure alignment.
+        df.sort_values(by=["group", "source", "target"], ignore_index=True, inplace=True)
+
+        # Normalize distance values to account for scaling differences.
+        df[cost] = df[cost] / df[cost].max()
+
+        # Generate empty matrix.
+        locations_source = sorted(set(df["source"]))
+        locations_target = sorted(set(df["target"]))
+        matrix = np.full((len(locations_source), len(locations_target)), 0.0)
+
+        # Iteratively populate matrix.
+        for i, source in enumerate(locations_source):
+            for j, target in enumerate(locations_target):
+                matrix[i, j] = df.loc[(df["source"] == source) & (df["target"] == target), cost]
+
+        return matrix
+
+    def _gen_msr_matrices(self, matrix: np.ndarray) -> [np.ndarray, ...]:
+        """
+        Generates Moran spectral randomization (MSR) matrices using singular value decomposition (SVD).
+
+        :param np.ndarray matrix: Cost-distance matrix.
+        :return [np.ndarray, ...]: List of randomized cost-distance matrices.
+        """
+
+        logger.info(f"Generating {self.permutations} Moran spectral randomization (MSR) matrices.")
+
+        # Decompose cost-distance matrix via singular value decomposition (SVD).
+        u, s, vh = svd(matrix, full_matrices=False, compute_uv=True, overwrite_a=False)
+
+        # Generate randomized matrices.
+        matrices_msr = list()
+        for _ in range(self.permutations):
+
+            # Generate randomized permutation.
+            s_permuted = np.random.permutation(s)
+
+            # Reconstruct as a matrix via dot product.
+            matrix_msr = np.dot(u * s_permuted, vh)
+            matrices_msr.append(matrix_msr)
+
+        return matrices_msr
+
     def calculate_pvalues(self) -> None:
         """Calculates two-tailed p-values for each group."""
 
         # Iterate groups.
         for group in set(self.lcps["group"]):
 
+            # Generate cost-distance matrices.
+            flag_group = self.lcps["group"] == group
+            matrix_lcp = self._gen_cd_matrix(self.lcps.loc[flag_group], cost="cost")
+            matrix_sp = self._gen_cd_matrix(self.sps.loc[flag_group], cost="distance")
+
+            # Generate Moran spectral randomization (MSR) matrices.
+            matrices_msr = self._gen_msr_matrices(matrix_lcp)
+
             logger.info(f"Calculating p-value for group: {group}.")
 
-            # Compile dissimilarity (distance) values.
-            flag_group = self.lcps["group"] == group
-            distances_lcp = self.lcps.loc[flag_group, "cost"].reset_index(drop=True)
-            distances_sp = self.sps.loc[flag_group, "distance"].reset_index(drop=True)
-
-            # Normalize distance values to account for scaling differences.
-            distances_lcp = distances_lcp / distances_lcp.max()
-            distances_sp = distances_sp / distances_sp.max()
+            # Flatten cost-distance matrices.
+            distances_lcp = matrix_lcp.flatten()
+            distances_sp = matrix_sp.flatten()
 
             # Calculate Pearson's correlation coefficient (r) based on the observed data.
-            r = distances_lcp.corr(distances_sp, method="pearson")
+            r = pearsonr(distances_lcp, distances_sp, alternative="two-sided")[0]
 
             # Permute data.
             r_permuted = list()
-            for _ in range(self.permutations):
+            for matrix_msr in matrices_msr:
 
-                # Shuffle distances.
-                distances_lcp_ = distances_lcp.sample(frac=1, replace=False, ignore_index=True)
+                # Flatten MSR matrix.
+                distances_msr = matrix_msr.flatten()
 
                 # Calculate Pearson's correlation coefficient (r) based on the permuted data.
-                r_ = distances_lcp_.corr(distances_sp, method="pearson")
+                r_ = pearsonr(distances_msr, distances_sp, alternative="two-sided")[0]
                 r_permuted.append(r_)
 
             # Calculate and store p-value (two-tailed).
             r_permuted = np.array(r_permuted)
             pvalue = (np.sum(np.abs(r_permuted) >= np.abs(r)) + 1) / (self.permutations + 1)
             self.pvalues.loc[self.pvalues["group"] == group, "pvalue"] = pvalue
+
 
 @click.command()
 @click.argument("src", type=click.Path(exists=True, file_okay=True, dir_okay=False, resolve_path=True, path_type=Path))
