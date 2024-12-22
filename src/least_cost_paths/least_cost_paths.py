@@ -224,9 +224,11 @@ def main(src_nodes: Path, field_index_source: str, field_index_target: str, fiel
     \b
     Description: Creates an igraph directed Graph from a set of node index pairs as edges, with associated cost values.
     For each permutation of source and target points within each named group of source and target points, calculates
-    the least-cost path along the Graph, using the cost values as the weight. Outputs a new layer to GeoPackage
-    'least_cost_paths.gpkg', based on a given name, within the same directory as `src_nodes` containing the following
-    attributes for each least-cost path:
+    the least-cost path along the Graph, using the cost values as the weight.
+
+    \b
+    Output: Outputs a new layer to GeoPackage 'least_cost_paths.gpkg', based on a given name, within the same directory
+    as `src_nodes` containing the following attributes for each least-cost path:
         - group: Group name of source - target point pair.
         - source: Index of source point.
         - target: Index of target point.

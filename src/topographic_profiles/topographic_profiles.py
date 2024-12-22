@@ -170,14 +170,16 @@ def main(src_lines: Path, src_layer: str, src_name: str, src_rasters: Path) -> N
     \b
     Description: For one or more LineStrings representing the path of the desired topographic profile(s), a sequence of
     points is interpolated at every 10-meter interval, including the first and last points in the LineString. Then, for
-    each point, the elevation value is retrieved from the cell of the DTM raster which the point intersects. For each
-    input LineString, both a .csv and GeoPackage layer is output containing the following columns:
+    each point, the elevation value is retrieved from the cell of the DTM raster which the point intersects.
+
+    \b
+    Output: For each input LineString, both a .csv and GeoPackage layer are output within a new subdirectory,
+    'topographic_profile', within the same directory containing the LineString source data and will contain the
+    following columns:
         - 'distance': the distance of each interpolated point along the LineString, including 0 and the distance of the
           final point in the LineString.
         - 'elevation': the elevation value of each point.
         - 'geometry': Point geometry (EPSG:3043; only for GeoPackage).
-    The output files will be created in a new directory, 'topographic_profile', within the same directory containing
-    the LineString source.
 
     \b
     Assumptions:

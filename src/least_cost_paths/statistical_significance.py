@@ -180,6 +180,18 @@ def main(src: Path, layer_lcps: str, layer_sps: str, dst_name: str, permutations
         2. Shortest-path results.
 
     \b
+    Output: Outputs a .csv, based on a given name, within the same directory the source GeoPackage, containing the
+    following attributes populated for each group:
+        - r_observed: Observed correlation coefficient.
+        - n_permuted: Number of permuted matrices.
+        - r_permuted_min: Minimum correlation coefficient from permuted matrices.
+        - r_permuted_max: Maximum correlation coefficient from permuted matrices.
+        - r_permuted_mean: Mean correlation coefficient from permuted matrices.
+        - r_permuted_abs_min: Minimum absolute correlation coefficient from permuted matrices.
+        - r_permuted_abs_max: Maximum absolute correlation coefficient from permuted matrices.
+        - r_permuted_abs_mean: Mean absolute correlation coefficient from permuted matrices.
+
+    \b
     Assumptions:
         - Input GeoPackage layers will:
             - Have the same schema and spatial properties as those exported by least_cost_paths.py.
