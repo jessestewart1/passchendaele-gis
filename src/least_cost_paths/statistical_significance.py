@@ -200,7 +200,7 @@ def main(src: Path, layer_lcps: str, layer_sps: str, dst_name: str, permutations
             - Contain neither duplicate source-target point pairs within any group nor reversed pairs.
 
     \b
-    :param Path src: GeoPackage (.gpkg) containing least-cost paths layer.
+    :param Path src: GeoPackage (.gpkg) containing least-cost paths layers.
     :param str layer_lcps: GeoPackage layer containing least-cost paths and their cost values.
     :param str layer_sps: GeoPackage layer containing shortest-paths and their distance values.
     :param str dst_name: Output CSV file name (excluding .csv suffix).
