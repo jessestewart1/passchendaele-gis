@@ -22,7 +22,7 @@ class MultipleRegression:
     """Defines the MultipleRegression class."""
 
     def __init__(self, src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_avenues_of_approach: Path,
-                 pvalue_rifle_viewsheds: Path, pvalue_machine_gun_viewsheds: Path, dst_name: Path) -> None:
+                 pvalue_rifle_viewsheds: Path, pvalue_machine_gun_viewsheds: Path, dst_name: str) -> None:
         """Initializes the MultipleRegression class."""
 
         self.dst = Path(src.parent / dst_name).with_suffix(".csv")
@@ -48,12 +48,12 @@ class MultipleRegression:
                                "machine_gun_viewsheds": pvalue_machine_gun_viewsheds}.items():
 
             logger.info(f"Compiling pvalues: {src} (indicator={indicator}).")
-            self.pvalues[indicator] = pd.read_csv(src, sep=",", header=0).copy(deep=True)
+            self.pvalues[indicator] = pd.read_csv(src, sep=",", header=0, usecols=["group", "pvalue"]).copy(deep=True)
 
     def __call__(self) -> None:
         """Executes the MultipleRegression class."""
 
-        ...
+        # TODO
 
 
 @click.command()
@@ -68,10 +68,9 @@ class MultipleRegression:
                 type=click.Path(exists=True, file_okay=True, dir_okay=False, resolve_path=True, path_type=Path))
 @click.argument("pvalue_machine_gun_viewsheds",
                 type=click.Path(exists=True, file_okay=True, dir_okay=False, resolve_path=True, path_type=Path))
-@click.argument("dst_name",
-                type=click.Path(exists=True, file_okay=True, dir_okay=False, resolve_path=True, path_type=Path))
+@click.argument("dst_name", type=click.STRING)
 def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_avenues_of_approach: Path,
-         pvalue_rifle_viewsheds: Path, pvalue_machine_gun_viewsheds: Path, dst_name: Path) -> None:
+         pvalue_rifle_viewsheds: Path, pvalue_machine_gun_viewsheds: Path, dst_name: str) -> None:
     """
     \b
     Description: For each group and aggregated manoeuvrability raster, using the statistically significant
