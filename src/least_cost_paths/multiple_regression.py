@@ -1,13 +1,11 @@
 import click
 import logging
-import numpy as np
 import pandas as pd
 import sys
 from pathlib import Path
-from scipy.linalg import svd
-from scipy.stats import pearsonr
 from sqlalchemy import create_engine
-from tqdm import tqdm
+from statsmodels.api import OLS
+from statsmodels.tools import add_constant
 
 # Set logger.
 logger = logging.getLogger(__name__)
@@ -29,6 +27,12 @@ class MultipleRegression:
         self.lcps = dict()
         self.pvalues = dict()
         self.alpha = 0.05
+        self.dependencies = {
+            "hazard_exposure": ["rifle_viewsheds", "machine_gun_viewsheds"],
+            "terrain_passability": ["slope", "ground_conditions", "avenues_of_approach"],
+            "manoeuvrability": ["slope", "ground_conditions", "avenues_of_approach", "rifle_viewsheds",
+                                "machine_gun_viewsheds"]
+        }
 
         # Compile least-cost paths.
         # Note: Not all columns required for statistical significance tests, including geometry, hence reading via SQL.
@@ -38,7 +42,12 @@ class MultipleRegression:
                       "hazard_exposure", "terrain_passability", "manoeuvrability"):
 
             logger.info(f"Compiling least-cost paths: {src}, layer={layer}.")
-            self.lcps[layer] = pd.read_sql(f"select {query_fields} from \"{layer}\"", con=engine).copy(deep=True)
+
+            # Load DataFrame.
+            df = pd.read_sql(f"select {query_fields} from \"{layer}\"", con=engine)
+
+            # Sort values.
+            self.lcps[layer] = df.sort_values(by=["group", "source", "target"], ignore_index=True).copy(deep=True)
 
         # Compile pvalues.
         for indicator, src in {"slope": pvalue_slope,
@@ -47,13 +56,58 @@ class MultipleRegression:
                                "rifle_viewsheds": pvalue_rifle_viewsheds,
                                "machine_gun_viewsheds": pvalue_machine_gun_viewsheds}.items():
 
-            logger.info(f"Compiling pvalues: {src} (indicator={indicator}).")
-            self.pvalues[indicator] = pd.read_csv(src, sep=",", header=0, usecols=["group", "pvalue"]).copy(deep=True)
+            logger.info(f"Identifying groups with statistically significant pvalues: {src} (indicator={indicator}).")
+            df = pd.read_csv(src, sep=",", header=0, usecols=["group", "pvalue"])
+            self.pvalues[indicator] = set(df.loc[df["pvalue"] <= self.alpha, "group"])
+
+        # Configure output DataFrame.
+        groups = list(set(self.lcps["slope"]["group"]))
+        self.dst_df = pd.DataFrame({"group": groups, **{col: [""] * len(groups) for col in self.dependencies}})
 
     def __call__(self) -> None:
         """Executes the MultipleRegression class."""
 
-        # TODO
+        self.gen_regression_equations()
+
+        # Export results.
+        self.dst_df.to_csv(self.dst, sep=",", header=True, index=False)
+        logger.info(f"Exported results to: {self.dst}.")
+
+    def gen_regression_equations(self) -> None:
+        """Creates a multiple regression model equation for each group and aggregated manoeuvrability indicator."""
+
+        # Iterate groups.
+        for group in sorted(set(self.lcps["slope"]["group"])):
+
+            # Iterate aggregated indicators.
+            for agg_indicator, indicators in self.dependencies.items():
+
+                logger.info(f"Generating regression equation for group = {group}; "
+                            f"aggregated indicator = {agg_indicator}.")
+
+                # Filter indicators to those that are statistically significant for group.
+                indicators = [i for i in indicators if group in self.pvalues[i]]
+
+                # Compile cost values for dependent and independent variables.
+                flag_group = self.lcps["slope"]["group"] == group
+                independent = pd.DataFrame({i: self.lcps[i].loc[flag_group, "cost"] for i in indicators})
+                dependent = pd.Series(self.lcps[agg_indicator].loc[flag_group, "cost"])
+
+                # Add constant and fit regression model.
+                independent = add_constant(independent)
+                model = OLS(endog=dependent, exog=independent).fit()
+
+                # Construct equation.
+                equation = f"y = {model.params['const']:.4f}"
+                for name, coefficient in model.params.items():
+                    if name != "const":
+                        if coefficient < 0:
+                            equation = f"{equation} - {abs(coefficient):.4f}({name})"
+                        else:
+                            equation = f"{equation} + {coefficient:.4f}({name})"
+
+                # Store results.
+                self.dst_df.loc[self.dst_df["group"] == group, agg_indicator] = equation
 
 
 @click.command()
@@ -73,7 +127,7 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
          pvalue_rifle_viewsheds: Path, pvalue_machine_gun_viewsheds: Path, dst_name: str) -> None:
     """
     \b
-    Description: For each group and aggregated manoeuvrability raster, using the statistically significant
+    Description: For each group and aggregated manoeuvrability indicator, using the statistically significant
     manoeuvrability indicators specific to each group, creates a multiple linear regression equation from least-cost
     paths cost values whereby:
         - independent variable(s): manoeuvrability indicator(s).
@@ -83,8 +137,9 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
     Output: Outputs a .csv, based on a given name, within the same directory the source pvalue CSVs, containing the
     following attributes:
         - group: Group name.
-        - dependent: Aggregated manoeuvrability raster name (dependent variable).
-        - equation: Regression equation.
+        - hazard_exposure: Regression equation for aggregated manoeuvrability indicator - hazard exposure.
+        - terrain_passability: Regression equation for aggregated manoeuvrability indicator - terrain passability.
+        - manoeuvrability: Regression equation for aggregated manoeuvrability indicator - manoeuvrability.
 
     \b
     Assumptions:
