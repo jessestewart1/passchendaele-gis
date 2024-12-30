@@ -2,6 +2,7 @@ import click
 import logging
 import pandas as pd
 import sys
+from itertools import product
 from pathlib import Path
 from sqlalchemy import create_engine
 from statsmodels.api import OLS
@@ -61,8 +62,11 @@ class MultipleRegression:
             self.pvalues[indicator] = set(df.loc[df["pvalue"] <= self.alpha, "group"])
 
         # Configure output DataFrame.
-        groups = list(set(self.lcps["slope"]["group"]))
-        self.dst_df = pd.DataFrame({"group": groups, **{col: [""] * len(groups) for col in self.dependencies}})
+        groups, agg_indicators = zip(*product(set(self.lcps["slope"]["group"]), set(self.dependencies)))
+        dst_cols = ("r2", "const", "slope", "ground_conditions", "avenues_of_approach", "rifle_viewsheds",
+                    "machine_gun_viewsheds")
+        self.dst_df = pd.DataFrame({"group": groups, "agg_indicator": agg_indicators,
+                                    **{col: [None] * len(groups) for col in dst_cols}})
 
     def __call__(self) -> None:
         """Executes the MultipleRegression class."""
@@ -97,17 +101,13 @@ class MultipleRegression:
                 independent = add_constant(independent)
                 model = OLS(endog=dependent, exog=independent).fit()
 
-                # Construct equation.
-                equation = f"y = {model.params['const']:.4f}"
+                # Populate results with equation components.
+                flag_record = (self.dst_df["group"] == group) & (self.dst_df["agg_indicator"] == agg_indicator)
                 for name, coefficient in model.params.items():
-                    if name != "const":
-                        if coefficient < 0:
-                            equation = f"{equation} - {abs(coefficient):.4f}({name})"
-                        else:
-                            equation = f"{equation} + {coefficient:.4f}({name})"
+                    self.dst_df.loc[flag_record, name] = round(coefficient, 4)
 
-                # Store results.
-                self.dst_df.loc[self.dst_df["group"] == group, agg_indicator] = equation
+                # Add r-squared to results.
+                self.dst_df.loc[flag_record, "r2"] = round(model.rsquared, 4)
 
 
 @click.command()
@@ -137,9 +137,14 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
     Output: Outputs a .csv, based on a given name, within the same directory the source pvalue CSVs, containing the
     following attributes:
         - group: Group name.
-        - hazard_exposure: Regression equation for aggregated manoeuvrability indicator - hazard exposure.
-        - terrain_passability: Regression equation for aggregated manoeuvrability indicator - terrain passability.
-        - manoeuvrability: Regression equation for aggregated manoeuvrability indicator - manoeuvrability.
+        - agg_indicator: Name of the aggregated manoeuvrability indicator that the regression equation is for.
+        - r2: Coefficient of determination for regression equation.
+        - const: Y-intercept of regression equation.
+        - slope: Coefficient for slope variable.
+        - ground_conditions: Coefficient for ground_conditions variable.
+        - avenues_of_approach: Coefficient for avenues_of_approach variable.
+        - rifle_viewsheds: Coefficient for rifle_viewsheds variable.
+        - machine_gun_viewsheds: Coefficient for machine_gun_viewsheds variable.
 
     \b
     Assumptions:
