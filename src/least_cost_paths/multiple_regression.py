@@ -1,5 +1,6 @@
 import click
 import logging
+import numpy as np
 import pandas as pd
 import sys
 from itertools import product
@@ -63,7 +64,7 @@ class MultipleRegression:
 
         # Configure output DataFrame.
         groups, agg_indicators = zip(*product(set(self.lcps["slope"]["group"]), set(self.dependencies)))
-        dst_cols = ("r2", "const", "slope", "ground_conditions", "avenues_of_approach", "rifle_viewsheds",
+        dst_cols = ("r2", "mae", "const", "slope", "ground_conditions", "avenues_of_approach", "rifle_viewsheds",
                     "machine_gun_viewsheds")
         self.dst_df = pd.DataFrame({"group": groups, "agg_indicator": agg_indicators,
                                     **{col: [None] * len(groups) for col in dst_cols}})
@@ -109,6 +110,10 @@ class MultipleRegression:
                 # Add r-squared to results.
                 self.dst_df.loc[flag_record, "r2"] = round(model.rsquared, 4)
 
+                # Add mean absolute error to results.
+                dependent_predicted = model.predict(independent)
+                self.dst_df.loc[flag_record, "mae"] = np.mean(np.abs(dependent - dependent_predicted))
+
 
 @click.command()
 @click.argument("src", type=click.Path(exists=True, file_okay=True, dir_okay=False, resolve_path=True, path_type=Path))
@@ -139,6 +144,7 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
         - group: Group name.
         - agg_indicator: Name of the aggregated manoeuvrability indicator that the regression equation is for.
         - r2: Coefficient of determination for regression equation.
+        - mae: Mean absolute error for regression equation.
         - const: Y-intercept of regression equation.
         - slope: Coefficient for slope variable.
         - ground_conditions: Coefficient for ground_conditions variable.
