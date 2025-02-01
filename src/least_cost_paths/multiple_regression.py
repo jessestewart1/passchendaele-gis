@@ -22,10 +22,11 @@ class MultipleRegression:
     """Defines the MultipleRegression class."""
 
     def __init__(self, src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_avenues_of_approach: Path,
-                 pvalue_rifle_viewsheds: Path, pvalue_machine_gun_viewsheds: Path, dst_name: str) -> None:
+                 pvalue_rifle_viewsheds: Path, pvalue_machine_gun_viewsheds: Path) -> None:
         """Initializes the MultipleRegression class."""
 
-        self.dst = Path(src.parent / dst_name).with_suffix(".csv")
+        self.dst_equally = Path(src.parent / "equations_equally_weighted.csv")
+        self.dst_regression = Path(src.parent / "equations_regression_weighted.csv")
         self.lcps = dict()
         self.pvalues = dict()
         self.alpha = 0.05
@@ -66,17 +67,60 @@ class MultipleRegression:
         groups, agg_indicators = zip(*product(set(self.lcps["slope"]["group"]), set(self.dependencies)))
         dst_cols = ("r2", "mae", "const", "slope", "ground_conditions", "avenues_of_approach", "rifle_viewsheds",
                     "machine_gun_viewsheds")
-        self.dst_df = pd.DataFrame({"group": groups, "agg_indicator": agg_indicators,
-                                    **{col: [None] * len(groups) for col in dst_cols}})
+        self.dst_df_equally = pd.DataFrame({"group": groups, "agg_indicator": agg_indicators,
+                                            **{col: [None] * len(groups) for col in dst_cols}})
+        self.dst_df_regression = pd.DataFrame({"group": groups, "agg_indicator": agg_indicators,
+                                               **{col: [None] * len(groups) for col in dst_cols}})
 
     def __call__(self) -> None:
         """Executes the MultipleRegression class."""
 
         self.gen_regression_equations()
+        self.gen_equally_weighted_equations()
 
         # Export results.
-        self.dst_df.to_csv(self.dst, sep=",", header=True, index=False)
-        logger.info(f"Exported results to: {self.dst}.")
+        self.dst_df_equally.to_csv(self.dst_equally, sep=",", header=True, index=False)
+        logger.info(f"Exported results to: {self.dst_equally}.")
+
+        self.dst_df_regression.to_csv(self.dst_regression, sep=",", header=True, index=False)
+        logger.info(f"Exported results to: {self.dst_regression}.")
+
+    def gen_equally_weighted_equations(self) -> None:
+        """Creates an equally weighted equation for each group and aggregated manoeuvrability indicator."""
+
+        # Iterate groups.
+        for group in sorted(set(self.lcps["slope"]["group"])):
+
+            # Iterate aggregated indicators.
+            for agg_indicator, indicators in self.dependencies.items():
+
+                logger.info(f"Generating regression equation for group = {group}; "
+                            f"aggregated indicator = {agg_indicator}.")
+
+                # Compile cost values for dependent and independent variables.
+                flag_group = self.lcps["slope"]["group"] == group
+                independent = pd.DataFrame({i: self.lcps[i].loc[flag_group, "cost"] for i in indicators})
+                dependent = pd.Series(self.lcps[agg_indicator].loc[flag_group, "cost"])
+
+                # Populate results with equation components (equal weights).
+                flag_record = ((self.dst_df_equally["group"] == group) &
+                               (self.dst_df_equally["agg_indicator"] == agg_indicator))
+                for indicator in indicators:
+                    self.dst_df_equally.loc[flag_record, indicator] = round(1 / len(indicators), 4)
+
+                # Add 0 constant to results.
+                self.dst_df_equally.loc[flag_record, "const"] = 0
+
+                # Calculate predicted values.
+                multiplier = 1 / len(indicators)
+                predicted = independent.apply(lambda row: sum([v * multiplier for v in row.values]), axis=1)
+
+                # Add r-squared to results.
+                r2 = 1 - (sum((dependent - predicted) ** 2) / sum((dependent - dependent.mean()) ** 2))
+                self.dst_df_equally.loc[flag_record, "r2"] = round(r2, 4)
+
+                # Add mean absolute error to results.
+                self.dst_df_equally.loc[flag_record, "mae"] = np.mean(np.abs(dependent - predicted))
 
     def gen_regression_equations(self) -> None:
         """Creates a multiple regression model equation for each group and aggregated manoeuvrability indicator."""
@@ -103,16 +147,17 @@ class MultipleRegression:
                 model = OLS(endog=dependent, exog=independent).fit()
 
                 # Populate results with equation components.
-                flag_record = (self.dst_df["group"] == group) & (self.dst_df["agg_indicator"] == agg_indicator)
+                flag_record = ((self.dst_df_regression["group"] == group) &
+                               (self.dst_df_regression["agg_indicator"] == agg_indicator))
                 for name, coefficient in model.params.items():
-                    self.dst_df.loc[flag_record, name] = round(coefficient, 4)
+                    self.dst_df_regression.loc[flag_record, name] = round(coefficient, 4)
 
                 # Add r-squared to results.
-                self.dst_df.loc[flag_record, "r2"] = round(model.rsquared, 4)
+                self.dst_df_regression.loc[flag_record, "r2"] = round(model.rsquared, 4)
 
                 # Add mean absolute error to results.
-                dependent_predicted = model.predict(independent)
-                self.dst_df.loc[flag_record, "mae"] = np.mean(np.abs(dependent - dependent_predicted))
+                predicted = model.predict(independent)
+                self.dst_df_regression.loc[flag_record, "mae"] = np.mean(np.abs(dependent - predicted))
 
 
 @click.command()
@@ -127,9 +172,8 @@ class MultipleRegression:
                 type=click.Path(exists=True, file_okay=True, dir_okay=False, resolve_path=True, path_type=Path))
 @click.argument("pvalue_machine_gun_viewsheds",
                 type=click.Path(exists=True, file_okay=True, dir_okay=False, resolve_path=True, path_type=Path))
-@click.argument("dst_name", type=click.STRING)
 def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_avenues_of_approach: Path,
-         pvalue_rifle_viewsheds: Path, pvalue_machine_gun_viewsheds: Path, dst_name: str) -> None:
+         pvalue_rifle_viewsheds: Path, pvalue_machine_gun_viewsheds: Path) -> None:
     """
     \b
     Description: For each group and aggregated manoeuvrability indicator, using the statistically significant
@@ -139,13 +183,15 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
         - dependent variable: aggregated manoeuvrability indicator.
 
     \b
-    Output: Outputs a .csv, based on a given name, within the same directory the source pvalue CSVs, containing the
-    following attributes:
+    Output: Outputs two .csv files within the same directory the source pvalue CSVs:
+        - equations_equally_weighted.csv: Equally weighted equations (non regression).
+        - equations_regression_weighted.csv: Multiple linear regression-weighted equations.
+    Each output file will contain the following attributes:
         - group: Group name.
-        - agg_indicator: Name of the aggregated manoeuvrability indicator that the regression equation is for.
-        - r2: Coefficient of determination for regression equation.
-        - mae: Mean absolute error for regression equation.
-        - const: Y-intercept of regression equation.
+        - agg_indicator: Name of the aggregated manoeuvrability indicator that the equation is for.
+        - r2: Coefficient of determination for equation.
+        - mae: Mean absolute error for equation.
+        - const: Y-intercept of equation.
         - slope: Coefficient for slope variable.
         - ground_conditions: Coefficient for ground_conditions variable.
         - avenues_of_approach: Coefficient for avenues_of_approach variable.
@@ -175,14 +221,13 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
     :param Path pvalue_avenues_of_approach: CSV (.csv) containing pvalues for indicator=avenues_of_approach.
     :param Path pvalue_rifle_viewsheds: CSV (.csv) containing pvalues for indicator=rifle_viewsheds.
     :param Path pvalue_machine_gun_viewsheds: CSV (.csv) containing pvalues for indicator=rifle_viewsheds.
-    :param str dst_name: Output CSV file name (excluding .csv suffix).
     """
 
     try:
 
         multiple_regression = MultipleRegression(src, pvalue_slope, pvalue_ground_conditions,
                                                  pvalue_avenues_of_approach, pvalue_rifle_viewsheds,
-                                                 pvalue_machine_gun_viewsheds, dst_name)
+                                                 pvalue_machine_gun_viewsheds)
         multiple_regression()
 
     except KeyboardInterrupt:
