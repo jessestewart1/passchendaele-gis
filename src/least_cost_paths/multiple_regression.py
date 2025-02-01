@@ -8,6 +8,7 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from statsmodels.api import OLS
 from statsmodels.tools import add_constant
+from tqdm import tqdm
 
 # Set logger.
 logger = logging.getLogger(__name__)
@@ -88,14 +89,12 @@ class MultipleRegression:
     def gen_equally_weighted_equations(self) -> None:
         """Creates an equally weighted equation for each group and aggregated manoeuvrability indicator."""
 
-        # Iterate groups.
-        for group in sorted(set(self.lcps["slope"]["group"])):
+        # Iterate aggregated indicators.
+        for agg_indicator, indicators in self.dependencies.items():
 
-            # Iterate aggregated indicators.
-            for agg_indicator, indicators in self.dependencies.items():
-
-                logger.info(f"Generating regression equation for group = {group}; "
-                            f"aggregated indicator = {agg_indicator}.")
+            # Iterate groups.
+            for group in tqdm(sorted(set(self.lcps["slope"]["group"])),
+                              desc=f"Generating equally weighted equations for agg. indicator = {agg_indicator}"):
 
                 # Compile cost values for dependent and independent variables.
                 flag_group = self.lcps["slope"]["group"] == group
@@ -125,21 +124,19 @@ class MultipleRegression:
     def gen_regression_equations(self) -> None:
         """Creates a multiple regression model equation for each group and aggregated manoeuvrability indicator."""
 
-        # Iterate groups.
-        for group in sorted(set(self.lcps["slope"]["group"])):
+        # Iterate aggregated indicators.
+        for agg_indicator, indicators in self.dependencies.items():
 
-            # Iterate aggregated indicators.
-            for agg_indicator, indicators in self.dependencies.items():
-
-                logger.info(f"Generating regression equation for group = {group}; "
-                            f"aggregated indicator = {agg_indicator}.")
+            # Iterate groups.
+            for group in tqdm(sorted(set(self.lcps["slope"]["group"])),
+                              desc=f"Generating regression-weighted equations for agg. indicator = {agg_indicator}"):
 
                 # Filter indicators to those that are statistically significant for group.
-                indicators = [i for i in indicators if group in self.pvalues[i]]
+                indicators_ = [i for i in indicators if group in self.pvalues[i]]
 
                 # Compile cost values for dependent and independent variables.
                 flag_group = self.lcps["slope"]["group"] == group
-                independent = pd.DataFrame({i: self.lcps[i].loc[flag_group, "cost"] for i in indicators})
+                independent = pd.DataFrame({i: self.lcps[i].loc[flag_group, "cost"] for i in indicators_})
                 dependent = pd.Series(self.lcps[agg_indicator].loc[flag_group, "cost"])
 
                 # Add constant and fit regression model.
