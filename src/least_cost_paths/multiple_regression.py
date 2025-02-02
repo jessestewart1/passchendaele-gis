@@ -108,7 +108,7 @@ class MultipleRegression:
                     self.dst_df_equally.loc[flag_record, indicator] = round(1 / len(indicators), 4)
 
                 # Add 0 constant to results.
-                self.dst_df_equally.loc[flag_record, "const"] = 0
+                self.dst_df_equally.loc[flag_record, "const"] = 0.0
 
                 # Calculate predicted values.
                 multiplier = 1 / len(indicators)
@@ -119,7 +119,7 @@ class MultipleRegression:
                 self.dst_df_equally.loc[flag_record, "r2"] = round(r2, 4)
 
                 # Add mean absolute error to results.
-                self.dst_df_equally.loc[flag_record, "mae"] = np.mean(np.abs(dependent - predicted))
+                self.dst_df_equally.loc[flag_record, "mae"] = round(np.mean(np.abs(dependent - predicted)), 4)
 
     def gen_regression_equations(self) -> None:
         """Creates a multiple regression model equation for each group and aggregated manoeuvrability indicator."""
@@ -154,7 +154,7 @@ class MultipleRegression:
 
                 # Add mean absolute error to results.
                 predicted = model.predict(independent)
-                self.dst_df_regression.loc[flag_record, "mae"] = np.mean(np.abs(dependent - predicted))
+                self.dst_df_regression.loc[flag_record, "mae"] = round(np.mean(np.abs(dependent - predicted)), 4)
 
 
 @click.command()
