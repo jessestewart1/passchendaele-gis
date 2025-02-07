@@ -26,7 +26,9 @@ class MultipleRegression:
                  pvalue_rifle_viewsheds: Path, pvalue_machine_gun_viewsheds: Path) -> None:
         """Initializes the MultipleRegression class."""
 
-        self.dst_equally = Path(src.parent / "equations_equally_weighted.csv")
+        self.dst_df_equal = pd.DataFrame()
+        self.dst_df_regression = pd.DataFrame()
+        self.dst_equal = Path(src.parent / "equations_equally_weighted.csv")
         self.dst_regression = Path(src.parent / "equations_regression_weighted.csv")
         self.lcps = dict()
         self.pvalues = dict()
@@ -64,97 +66,85 @@ class MultipleRegression:
             df = pd.read_csv(src, sep=",", header=0, usecols=["group", "pvalue"])
             self.pvalues[indicator] = set(df.loc[df["pvalue"] <= self.alpha, "group"])
 
-        # Configure output DataFrame.
-        groups, agg_indicators = zip(*product(set(self.lcps["slope"]["group"]), set(self.dependencies)))
-        dst_cols = ("r2", "mae", "const", "slope", "ground_conditions", "avenues_of_approach", "rifle_viewsheds",
-                    "machine_gun_viewsheds")
-        self.dst_df_equally = pd.DataFrame({"group": groups, "agg_indicator": agg_indicators,
-                                            **{col: [None] * len(groups) for col in dst_cols}})
-        self.dst_df_regression = pd.DataFrame({"group": groups, "agg_indicator": agg_indicators,
-                                               **{col: [None] * len(groups) for col in dst_cols}})
-
     def __call__(self) -> None:
         """Executes the MultipleRegression class."""
 
-        self.gen_regression_equations()
-        self.gen_equally_weighted_equations()
+        self.dst_df_equal = self.gen_equations(equal_coeff=True)
+        self.dst_df_regression = self.gen_equations(equal_coeff=False)
 
         # Export results.
-        self.dst_df_equally.to_csv(self.dst_equally, sep=",", header=True, index=False)
-        logger.info(f"Exported results to: {self.dst_equally}.")
+        self.dst_df_equal.to_csv(self.dst_equal, sep=",", header=True, index=False)
+        logger.info(f"Exported results to: {self.dst_equal}.")
 
         self.dst_df_regression.to_csv(self.dst_regression, sep=",", header=True, index=False)
         logger.info(f"Exported results to: {self.dst_regression}.")
 
-    def gen_equally_weighted_equations(self) -> None:
-        """Creates an equally weighted equation for each group and aggregated manoeuvrability indicator."""
+    def gen_equations(self, equal_coeff: bool = False) -> pd.DataFrame:
+        """
+        Creates an equation for each group and aggregated manoeuvrability indicator.
+
+        :param bool equal_coeff: Indicates if coefficients are to be equal. Default = False.
+        :return pd.DataFrame: DataFrame containing equation components and evaluation metrics.
+        """
+
+        # Configure output DataFrame.
+        groups, agg_indicators = zip(*product(set(self.lcps["slope"]["group"]), set(self.dependencies)))
+        dst_cols = ("r2", "mae", "const", "slope", "ground_conditions", "avenues_of_approach", "rifle_viewsheds",
+                    "machine_gun_viewsheds")
+        results = pd.DataFrame({"group": groups, "agg_indicator": agg_indicators,
+                                **{col: [None] * len(groups) for col in dst_cols}})
 
         # Iterate aggregated indicators.
         for agg_indicator, indicators in self.dependencies.items():
 
             # Iterate groups.
             for group in tqdm(sorted(set(self.lcps["slope"]["group"])),
-                              desc=f"Generating equally weighted equations for agg. indicator = {agg_indicator}"):
+                              desc=f"Generating equations for agg. indicator = {agg_indicator}; equal weight = "
+                                   f"{equal_coeff}"):
 
                 # Compile cost values for dependent and independent variables.
                 flag_group = self.lcps["slope"]["group"] == group
-                independent = pd.DataFrame({i: self.lcps[i].loc[flag_group, "cost"] for i in indicators})
                 dependent = pd.Series(self.lcps[agg_indicator].loc[flag_group, "cost"])
 
-                # Populate results with equation components (equal weights).
-                flag_record = ((self.dst_df_equally["group"] == group) &
-                               (self.dst_df_equally["agg_indicator"] == agg_indicator))
-                for indicator in indicators:
-                    self.dst_df_equally.loc[flag_record, indicator] = round(1 / len(indicators), 4)
+                # Independent variables - equal weighted.
+                if equal_coeff:
 
-                # Add 0 constant to results.
-                self.dst_df_equally.loc[flag_record, "const"] = 0.0
+                    independent = pd.DataFrame({i: self.lcps[i].loc[flag_group, "cost"] for i in indicators})\
+                        .sum(axis=1)
 
-                # Calculate predicted values.
-                multiplier = 1 / len(indicators)
-                predicted = independent.apply(lambda row: sum([v * multiplier for v in row.values]), axis=1)
+                # Independent variables - regression-weighted.
+                else:
 
-                # Add r-squared to results.
-                r2 = 1 - (sum((dependent - predicted) ** 2) / sum((dependent - dependent.mean()) ** 2))
-                self.dst_df_equally.loc[flag_record, "r2"] = round(r2, 4)
-
-                # Add mean absolute error to results.
-                self.dst_df_equally.loc[flag_record, "mae"] = round(np.mean(np.abs(dependent - predicted)), 4)
-
-    def gen_regression_equations(self) -> None:
-        """Creates a multiple regression model equation for each group and aggregated manoeuvrability indicator."""
-
-        # Iterate aggregated indicators.
-        for agg_indicator, indicators in self.dependencies.items():
-
-            # Iterate groups.
-            for group in tqdm(sorted(set(self.lcps["slope"]["group"])),
-                              desc=f"Generating regression-weighted equations for agg. indicator = {agg_indicator}"):
-
-                # Filter indicators to those that are statistically significant for group.
-                indicators_ = [i for i in indicators if group in self.pvalues[i]]
-
-                # Compile cost values for dependent and independent variables.
-                flag_group = self.lcps["slope"]["group"] == group
-                independent = pd.DataFrame({i: self.lcps[i].loc[flag_group, "cost"] for i in indicators_})
-                dependent = pd.Series(self.lcps[agg_indicator].loc[flag_group, "cost"])
+                    # Filter indicators to those that are statistically significant for group.
+                    indicators_ = [i for i in indicators if group in self.pvalues[i]]
+                    independent = pd.DataFrame({i: self.lcps[i].loc[flag_group, "cost"] for i in indicators_})
 
                 # Add constant and fit regression model.
                 independent = add_constant(independent)
                 model = OLS(endog=dependent, exog=independent).fit()
 
-                # Populate results with equation components.
-                flag_record = ((self.dst_df_regression["group"] == group) &
-                               (self.dst_df_regression["agg_indicator"] == agg_indicator))
-                for name, coefficient in model.params.items():
-                    self.dst_df_regression.loc[flag_record, name] = round(coefficient, 4)
+                # Add equation coefficients and constant to results.
+                flag_record = (results["group"] == group) & (results["agg_indicator"] == agg_indicator)
+
+                # Coefficients - equal weighted.
+                if equal_coeff:
+                    results.loc[flag_record, "const"] = round(model.params["const"], 4)
+                    for indicator in indicators:
+                        results.loc[flag_record, indicator] = round(model.params[0], 4)
+
+                # Coefficients - regression-weighted.
+                else:
+                    for name, coefficient in model.params.items():
+                        results.loc[flag_record, name] = round(coefficient, 4)
 
                 # Add r-squared to results.
-                self.dst_df_regression.loc[flag_record, "r2"] = round(model.rsquared, 4)
+                results.loc[flag_record, "r2"] = round(model.rsquared, 4)
 
                 # Add mean absolute error to results.
                 predicted = model.predict(independent)
-                self.dst_df_regression.loc[flag_record, "mae"] = round(np.mean(np.abs(dependent - predicted)), 4)
+                results.loc[flag_record, "mae"] = round(np.mean(np.abs(dependent - predicted)), 4)
+
+        return results
 
 
 @click.command()
