@@ -37,7 +37,7 @@ class RegressionAnova:
         self.dst_df_anova_between = pd.DataFrame()
         self.dst_anova_equal = Path(src.parent / "anova_equally_weighted.csv")
         self.dst_anova_optimized = Path(src.parent / "anova_regression_optimized.csv")
-        self.dst_anova_between = Path(src.parent / "anova_regression_between.csv")
+        self.dst_anova_between = Path(src.parent / "anova_between.csv")
         self.models_equal = defaultdict(dict)
         self.models_optimized = defaultdict(dict)
         self.lcps = dict()
@@ -57,7 +57,7 @@ class RegressionAnova:
         for layer in ("slope", "ground_conditions", "avenues_of_approach", "rifle_viewsheds", "machine_gun_viewsheds",
                       "hazard_exposure", "terrain_passability", "manoeuvrability"):
 
-            logger.info(f"Compiling least-cost paths: {src}, layer={layer}.")
+            logger.info(f"Compiling least-cost path attribution: {src}, layer={layer}.")
 
             # Load DataFrame.
             df = pd.read_sql(f"select {query_fields} from \"{layer}\"", con=engine)
@@ -133,8 +133,8 @@ class RegressionAnova:
             flag_record = (self.dst_df_anova_equal["group_a"] == group_a) & \
                           (self.dst_df_anova_equal["group_b"] == group_b) & \
                           (self.dst_df_anova_equal["agg_indicator"] == agg_indicator)
-            self.dst_df_anova_equal.loc[flag_record, "fstat"] = anova["F"].iloc[1]
-            self.dst_df_anova_equal.loc[flag_record, "pvalue"] = anova["Pr(>F)"].iloc[1]
+            self.dst_df_anova_equal.loc[flag_record, "fstat"] = anova.iloc[1]["F"]
+            self.dst_df_anova_equal.loc[flag_record, "pvalue"] = anova.iloc[1]["Pr(>F)"]
 
         # ANOVA - Regression-optimized models.
         self.dst_df_anova_optimized = pd.DataFrame({col: [None] * len(group_pair_indicator_combos) for col in
@@ -152,8 +152,8 @@ class RegressionAnova:
             flag_record = (self.dst_df_anova_optimized["group_a"] == group_a) & \
                           (self.dst_df_anova_optimized["group_b"] == group_b) & \
                           (self.dst_df_anova_optimized["agg_indicator"] == agg_indicator)
-            self.dst_df_anova_optimized.loc[flag_record, "fstat"] = anova["F"].iloc[1]
-            self.dst_df_anova_optimized.loc[flag_record, "pvalue"] = anova["Pr(>F)"].iloc[1]
+            self.dst_df_anova_optimized.loc[flag_record, "fstat"] = anova.iloc[1]["F"]
+            self.dst_df_anova_optimized.loc[flag_record, "pvalue"] = anova.iloc[1]["Pr(>F)"]
 
         # ANOVA - Between models.
         self.dst_df_anova_between = pd.DataFrame({col: [None] * len(group_pair_indicator_combos) for col in
@@ -170,8 +170,8 @@ class RegressionAnova:
             # Store results.
             flag_record = (self.dst_df_anova_between["group"] == group) & \
                           (self.dst_df_anova_between["agg_indicator"] == agg_indicator)
-            self.dst_df_anova_between.loc[flag_record, "fstat"] = anova["F"].iloc[1]
-            self.dst_df_anova_between.loc[flag_record, "pvalue"] = anova["Pr(>F)"].iloc[1]
+            self.dst_df_anova_between.loc[flag_record, "fstat"] = anova.iloc[1]["F"]
+            self.dst_df_anova_between.loc[flag_record, "pvalue"] = anova.iloc[1]["Pr(>F)"]
 
     def gen_equations(self, equal_coeff: bool = False) -> pd.DataFrame:
         """
@@ -324,10 +324,10 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
     \b
     :param Path src: GeoPackage (.gpkg) containing least-cost paths layers.
     :param Path pvalue_slope: CSV (.csv) containing pvalues for indicator=slope.
-    :param Path pvalue_ground_conditions: CSV (.csv) containing pvalues for indicator=ground_conditions.
-    :param Path pvalue_avenues_of_approach: CSV (.csv) containing pvalues for indicator=avenues_of_approach.
-    :param Path pvalue_rifle_viewsheds: CSV (.csv) containing pvalues for indicator=rifle_viewsheds.
-    :param Path pvalue_machine_gun_viewsheds: CSV (.csv) containing pvalues for indicator=rifle_viewsheds.
+    :param Path pvalue_ground_conditions: CSV (.csv) containing pvalues for indicator=ground conditions.
+    :param Path pvalue_avenues_of_approach: CSV (.csv) containing pvalues for indicator=avenues of approach.
+    :param Path pvalue_rifle_viewsheds: CSV (.csv) containing pvalues for indicator=rifle viewsheds.
+    :param Path pvalue_machine_gun_viewsheds: CSV (.csv) containing pvalues for indicator=machine gun viewsheds.
     """
 
     try:
