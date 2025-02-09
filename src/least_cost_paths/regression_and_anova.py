@@ -9,6 +9,7 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from statsmodels.api import OLS
 from statsmodels.stats.anova import anova_lm
+from statsmodels.stats.multitest import multipletests
 from statsmodels.tools import add_constant
 from tqdm import tqdm
 
@@ -118,8 +119,15 @@ class RegressionAnova:
         group_pair_indicator_combos = tuple(product(combinations(groups, 2), set(self.dependencies)))
 
         # ANOVA - Equally weighted models.
-        self.dst_df_anova_equal = pd.DataFrame({col: [None] * len(group_pair_indicator_combos) for col in
-                                                ("group_a", "group_b", "agg_indicator", "fstat", "pvalue")})
+        # TODO - use tukeys hsd
+
+        # Create output DataFrame.
+        self.dst_df_anova_equal = pd.DataFrame({
+            "group_a": [vals[0][0] for vals in group_pair_indicator_combos],
+            "group_b": [vals[0][1] for vals in group_pair_indicator_combos],
+            "agg_indicator": [vals[1] for vals in group_pair_indicator_combos],
+            **{col: [0.0] * len(group_pair_indicator_combos) for col in ("fstat", "pvalue")}
+        })
 
         # Iterate aggregated indicators and group combinations.
         for iter_params in tqdm(group_pair_indicator_combos, desc="Performing ANOVA for equally weighted models"):
@@ -137,8 +145,15 @@ class RegressionAnova:
             self.dst_df_anova_equal.loc[flag_record, "pvalue"] = anova.iloc[1]["Pr(>F)"]
 
         # ANOVA - Regression-optimized models.
-        self.dst_df_anova_optimized = pd.DataFrame({col: [None] * len(group_pair_indicator_combos) for col in
-                                                    ("group_a", "group_b", "agg_indicator", "fstat", "pvalue")})
+        # TODO - use tukeys hsd
+
+        # Create output DataFrame.
+        self.dst_df_anova_optimized = pd.DataFrame({
+            "group_a": [vals[0][0] for vals in group_pair_indicator_combos],
+            "group_b": [vals[0][1] for vals in group_pair_indicator_combos],
+            "agg_indicator": [vals[1] for vals in group_pair_indicator_combos],
+            **{col: [0.0] * len(group_pair_indicator_combos) for col in ("fstat", "pvalue")}
+        })
 
         # Iterate aggregated indicators and group combinations.
         for iter_params in tqdm(group_pair_indicator_combos, desc="Performing ANOVA for regression-optimized models"):
@@ -156,8 +171,13 @@ class RegressionAnova:
             self.dst_df_anova_optimized.loc[flag_record, "pvalue"] = anova.iloc[1]["Pr(>F)"]
 
         # ANOVA - Between models.
-        self.dst_df_anova_between = pd.DataFrame({col: [None] * len(group_pair_indicator_combos) for col in
-                                                  ("group", "agg_indicator", "fstat", "pvalue")})
+
+        # Create output DataFrame.
+        self.dst_df_anova_between = pd.DataFrame({
+            "group": [vals[0] for vals in group_indicator_combos],
+            "agg_indicator": [vals[1] for vals in group_indicator_combos],
+            **{col: [0.0] * len(group_indicator_combos) for col in ("fstat", "pvalue")}
+        })
 
         # Iterate aggregated indicators and groups.
         for iter_params in tqdm(group_indicator_combos, desc="Performing ANOVA between models"):
@@ -172,6 +192,68 @@ class RegressionAnova:
                           (self.dst_df_anova_between["agg_indicator"] == agg_indicator)
             self.dst_df_anova_between.loc[flag_record, "fstat"] = anova.iloc[1]["F"]
             self.dst_df_anova_between.loc[flag_record, "pvalue"] = anova.iloc[1]["Pr(>F)"]
+
+        # Apply Benjamini-Hochberg procedure for False Discovery Rate (BH-FDR) control.
+        for agg_indicator in tqdm(set([vals[1] for vals in group_indicator_combos]), desc="Applying BH-FDR correction"):
+
+            # Compile pvalues.
+            flag_records = (self.dst_df_anova_between["agg_indicator"] == agg_indicator) & \
+                           (~self.dst_df_anova_between["pvalue"].isna())
+            pvalues = self.dst_df_anova_between.loc[flag_records, "pvalue"].values
+
+            # Apply BH-FDR control to get corrected pvalues.
+            pvalues_corr = multipletests(pvalues, alpha=0.05, method="fdr_bh", is_sorted=False, returnsorted=False)[1]
+
+            # Store corrected pvalues.
+            self.dst_df_anova_between.loc[flag_records, "pvalue"] = pvalues_corr
+
+        # TODO - testing multicollinearity - try this for all groups and for each agg indicator one at a time
+        # check vif (multicollinearity)
+        from statsmodels.stats.outliers_influence import variance_inflation_factor
+        X = self.models_optimized['P.P.C.L.I. - Blue']['manoeuvrability'].model.exog
+        vif = pd.DataFrame({'variable': self.models_optimized['P.P.C.L.I. - Blue']['manoeuvrability'].model.exog_names,
+                            'vif': [variance_inflation_factor(X, i) for i in range(X.shape[1])]})
+        print(vif)
+
+        # gen correlation matix to see which variables to fix
+        corr_matrix = pd.DataFrame(self.models_optimized['P.P.C.L.I. - Blue']['manoeuvrability'].model.exog,
+                                   columns=self.models_optimized['P.P.C.L.I. - Blue']['manoeuvrability'].model.exog_names).drop(columns=['const'])
+        corr_matrix['viewsheds'] = corr_matrix[['rifle_viewsheds','machine_gun_viewsheds']].apply(lambda row: sum(row.values) / 2, axis=1)
+        corr_matrix.drop(columns=['rifle_viewsheds','machine_gun_viewsheds'], inplace=True)
+        corr_matrix_ = corr_matrix.corr()
+        print(corr_matrix_)
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(8,6))
+        cax = ax.imshow(corr_matrix_, cmap="coolwarm", interpolation="nearest")
+        fig.colorbar(cax)
+        ax.set_xticks(np.arange(len(corr_matrix_.columns)))
+        ax.set_yticks(np.arange(len(corr_matrix_.columns)))
+        ax.set_xticklabels(corr_matrix_.columns, rotation=45, ha="right")
+        ax.set_yticklabels(corr_matrix_.columns)
+        for i in range(len(corr_matrix_.columns)):
+            for j in range(len(corr_matrix_.columns)):
+                ax.text(j, i, f"{corr_matrix_.iloc[i, j]:.2f}", ha="center", va="center", color="black")
+        plt.title("Correlation Matrix")
+        plt.tight_layout()
+        plt.show()
+
+        # try new model with average of viewsheds
+        flag = self.lcps['manoeuvrability']['group'] == 'P.P.C.L.I. - Blue'
+        dependent = pd.Series(self.lcps["manoeuvrability"].loc[flag, "cost"])
+        independent = pd.DataFrame({i: self.lcps[i].loc[flag, "cost"] for i in ('slope','ground_conditions','avenues_of_approach','rifle_viewsheds','machine_gun_viewsheds')})
+        independent['viewsheds'] = independent[['rifle_viewsheds','machine_gun_viewsheds']].apply(lambda row: sum(row.values) / 2, axis=1)
+        independent.drop(columns=['rifle_viewsheds','machine_gun_viewsheds'], inplace=True)
+        independent = add_constant(independent)
+        new_model = OLS(endog=dependent, exog=independent).fit()
+        print(new_model.params, new_model.rsquared)
+
+        # show new model vif
+        X = new_model.model.exog
+        vif = pd.DataFrame({'variable': new_model.model.exog_names,
+                            'vif': [variance_inflation_factor(X, i) for i in range(X.shape[1])]})
+        print(vif)
+
+        # TODO - testing multicollinearity
 
     def gen_equations(self, equal_coeff: bool = False) -> pd.DataFrame:
         """
