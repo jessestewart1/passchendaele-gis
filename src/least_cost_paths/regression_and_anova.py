@@ -42,20 +42,33 @@ class RidgeOLS:
         self.nobs = len(dependent)
         self.df_model = independent.shape[1]
         self.df_resid = self.nobs - (self.df_model + 1)
-
-        self.fittedvalues = ridge_model.predict(independent)
-        self.resid = dependent - self.fittedvalues
+        self.fitted_values = ridge_model.predict(independent)
+        self.residuals = dependent - self.fittedvalues
         self.ssr = np.sum(self.resid ** 2)
         self.sst = np.sum((dependent - np.mean(dependent)) ** 2)
         self.rsquared = 1 - (self.ssr / self.sst)
+        self.scale = np.sum(self.resid ** 2) / self.df_resid
+
+    @property
+    def fittedvalues(self) -> pd.Series:
+        """Imitates the OLS.fittedvalues property."""
+
+        return self.fitted_values
+
+    @property
+    def model(self):
+        """Imitates the OLS.model property."""
+
+        return self
+
+    @property
+    def resid(self) -> pd.Series:
+        """Imitates the OLS.resid property."""
+
+        return self.residuals
 
     def predict(self, independent: pd.DataFrame) -> np.ndarray:
-        """
-        Imitates the OLS.predict method.
-
-        :param pd.DataFrame independent: Independent variable values to evaluate against the model.
-        :return np.ndarray: Predicted values.
-        """
+        """Imitates the OLS.predict method."""
 
         return np.dot(add_constant(independent), self.params)
 
@@ -278,6 +291,7 @@ class RegressionAnova:
 
                     independent = pd.DataFrame({i: self.lcps[i].loc[flag_group, "cost"] for i in indicators})\
                         .sum(axis=1)
+                    independent = pd.DataFrame({"independent": independent})
 
                 # Independent variables - regression-optimized.
                 else:
@@ -288,12 +302,13 @@ class RegressionAnova:
 
                 # Aggregate viewshed indicators via mean, if applicable to current aggregated indicator.
                 # Note: Indicators adjustment recommended due to extreme multicollinearity after manual inspection.
-                viewshed_indicators = [col for col in independent.columns if col.endswith("_viewsheds")]
-                if (len(viewshed_indicators) > 1) and (agg_indicators == "manoeuvrability"):
+                if agg_indicator == "manoeuvrability":
+                    viewshed_indicators = [col for col in independent.columns if col.endswith("_viewsheds")]
+                    if len(viewshed_indicators) > 1:
 
-                    # Aggregate indicators.
-                    independent["viewsheds"] = independent[viewshed_indicators].mean(axis=1)
-                    independent.drop(columns=viewshed_indicators, inplace=True)
+                        # Aggregate indicators.
+                        independent["viewsheds"] = independent[viewshed_indicators].mean(axis=1)
+                        independent.drop(columns=viewshed_indicators, inplace=True)
 
                 # Regression - equally weighted.
                 if equal_coeff:
@@ -305,9 +320,12 @@ class RegressionAnova:
                 # Regression - regression-optimized.
                 else:
 
+                    # Create model training and testing data.
+                    x_train, _, y_train, _ = train_test_split(independent, dependent, test_size=0.2,
+                                                                        random_state=42, shuffle=True)
+                    x_train = pd.DataFrame(x_train, columns=independent.columns)
+
                     # Determine best alpha value for ridge regression.
-                    x_train, x_test, y_train, y_test = train_test_split(independent.values, dependent.values,
-                                                                        test_size=0.2, random_state=42, shuffle=True)
                     alpha_best = RidgeCV(alphas=np.logspace(start=-3, stop=3, num=100, endpoint=True),
                                          fit_intercept=True).fit(X=x_train, y=y_train).alpha_
 
@@ -327,14 +345,24 @@ class RegressionAnova:
                 # Add equation components to results.
                 flag_record = (results["group"] == group) & (results["agg_indicator"] == agg_indicator)
 
-                # Add constant and coefficients.
+                # Add constant, r-squared, and mean absolute error.
                 results.loc[flag_record, "const"] = round(model.params["const"], 4)
-                for name, coefficient in model.params.items():
-                    results.loc[flag_record, name] = round(coefficient, 4)
-
-                # Add model evaluation metrics - r-squared and mean absolute error.
                 results.loc[flag_record, "r2"] = round(model.rsquared, 4)
                 results.loc[flag_record, "mae"] = round(np.mean(np.abs(dependent - model.predict(independent))), 4)
+
+                # Add coefficients - equally weighted.
+                # Note: Conditionally populate aggregated viewsheds indicator, depending on the agg. indicator.
+                if equal_coeff:
+                    indicators_ = indicators
+                    if agg_indicator == "manoeuvrability":
+                        indicators_ = ["viewsheds" if i.endswith("_viewsheds") else i for i in indicators]
+                    for name in indicators_:
+                        results.loc[flag_record, name] = round(model.params["independent"], 4)
+
+                # Add coefficients - regression-optimized.
+                else:
+                    for name, coefficient in model.params.items():
+                        results.loc[flag_record, name] = round(coefficient, 4)
 
         return results
 
@@ -386,8 +414,9 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
         - slope: Coefficient for slope variable.
         - ground_conditions: Coefficient for ground_conditions variable.
         - avenues_of_approach: Coefficient for avenues_of_approach variable.
-        - rifle_viewsheds: Coefficient for rifle_viewsheds variable.
-        - machine_gun_viewsheds: Coefficient for machine_gun_viewsheds variable.
+        - rifle_viewsheds: Coefficient for rifle_viewsheds variable (except manoeuvrability agg. indicator).
+        - machine_gun_viewsheds: Coefficient for machine_gun_viewsheds variable (except manoeuvrability agg. indicator).
+        - viewsheds: Coefficient for mean-aggregated viewshed variables (manoeuvrability agg. indicator only).
 
     Each ANOVA output file will contain the following attributes:
         - group: Group name (anova_between only).
