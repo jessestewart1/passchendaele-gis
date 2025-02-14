@@ -6,8 +6,11 @@ import sys
 from collections import defaultdict
 from itertools import combinations, product
 from pathlib import Path
+from sklearn.linear_model import RidgeCV
+from sklearn.model_selection import train_test_split
 from sqlalchemy import create_engine
 from statsmodels.api import OLS
+from statsmodels.stats import multicomp
 from statsmodels.stats.anova import anova_lm
 from statsmodels.stats.multitest import multipletests
 from statsmodels.tools import add_constant
@@ -20,6 +23,41 @@ handler = logging.StreamHandler(sys.stdout)
 handler.setLevel(logging.INFO)
 handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S"))
 logger.addHandler(handler)
+
+
+class RidgeOLS:
+    """Imitates a statsmodels OLS model for an sklearn RidgeCV model."""
+
+    def __init__(self, ridge_model: RidgeCV, dependent: pd.Series, independent: pd.DataFrame) -> None:
+        """
+        Initializes the OLS imitation class.
+
+        :param RidgeCV ridge_model: RidgeCV model.
+        :param pd.Series dependent: Dependent variable values.
+        :param pd.DataFrame independent: Independent variable values.
+        """
+
+        self.params = pd.Series(np.hstack([ridge_model.intercept_, ridge_model.coef_]),
+                                index=["const", *independent.columns])
+        self.nobs = len(dependent)
+        self.df_model = independent.shape[1]
+        self.df_resid = self.nobs - (self.df_model + 1)
+
+        self.fittedvalues = ridge_model.predict(independent)
+        self.resid = dependent - self.fittedvalues
+        self.ssr = np.sum(self.resid ** 2)
+        self.sst = np.sum((dependent - np.mean(dependent)) ** 2)
+        self.rsquared = 1 - (self.ssr / self.sst)
+
+    def predict(self, independent: pd.DataFrame) -> np.ndarray:
+        """
+        Imitates the OLS.predict method.
+
+        :param pd.DataFrame independent: Independent variable values to evaluate against the model.
+        :return np.ndarray: Predicted values.
+        """
+
+        return np.dot(add_constant(independent), self.params)
 
 
 class RegressionAnova:
@@ -119,7 +157,7 @@ class RegressionAnova:
         group_pair_indicator_combos = tuple(product(combinations(groups, 2), set(self.dependencies)))
 
         # ANOVA - Equally weighted models.
-        # TODO - use tukeys hsd
+        # TODO - use tukeys hsd - currently uses anova
 
         # Create output DataFrame.
         self.dst_df_anova_equal = pd.DataFrame({
@@ -145,7 +183,7 @@ class RegressionAnova:
             self.dst_df_anova_equal.loc[flag_record, "pvalue"] = anova.iloc[1]["Pr(>F)"]
 
         # ANOVA - Regression-optimized models.
-        # TODO - use tukeys hsd
+        # TODO - use tukeys hsd - currently uses anova
 
         # Create output DataFrame.
         self.dst_df_anova_optimized = pd.DataFrame({
@@ -207,57 +245,10 @@ class RegressionAnova:
             # Store corrected pvalues.
             self.dst_df_anova_between.loc[flag_records, "pvalue"] = pvalues_corr
 
-        # TODO - testing multicollinearity - try this for all groups and for each agg indicator one at a time
-        # check vif (multicollinearity)
-        from statsmodels.stats.outliers_influence import variance_inflation_factor
-        X = self.models_optimized['P.P.C.L.I. - Blue']['manoeuvrability'].model.exog
-        vif = pd.DataFrame({'variable': self.models_optimized['P.P.C.L.I. - Blue']['manoeuvrability'].model.exog_names,
-                            'vif': [variance_inflation_factor(X, i) for i in range(X.shape[1])]})
-        print(vif)
-
-        # gen correlation matix to see which variables to fix
-        corr_matrix = pd.DataFrame(self.models_optimized['P.P.C.L.I. - Blue']['manoeuvrability'].model.exog,
-                                   columns=self.models_optimized['P.P.C.L.I. - Blue']['manoeuvrability'].model.exog_names).drop(columns=['const'])
-        corr_matrix['viewsheds'] = corr_matrix[['rifle_viewsheds','machine_gun_viewsheds']].apply(lambda row: sum(row.values) / 2, axis=1)
-        corr_matrix.drop(columns=['rifle_viewsheds','machine_gun_viewsheds'], inplace=True)
-        corr_matrix_ = corr_matrix.corr()
-        print(corr_matrix_)
-        import matplotlib.pyplot as plt
-        fig, ax = plt.subplots(figsize=(8,6))
-        cax = ax.imshow(corr_matrix_, cmap="coolwarm", interpolation="nearest")
-        fig.colorbar(cax)
-        ax.set_xticks(np.arange(len(corr_matrix_.columns)))
-        ax.set_yticks(np.arange(len(corr_matrix_.columns)))
-        ax.set_xticklabels(corr_matrix_.columns, rotation=45, ha="right")
-        ax.set_yticklabels(corr_matrix_.columns)
-        for i in range(len(corr_matrix_.columns)):
-            for j in range(len(corr_matrix_.columns)):
-                ax.text(j, i, f"{corr_matrix_.iloc[i, j]:.2f}", ha="center", va="center", color="black")
-        plt.title("Correlation Matrix")
-        plt.tight_layout()
-        plt.show()
-
-        # try new model with average of viewsheds
-        flag = self.lcps['manoeuvrability']['group'] == 'P.P.C.L.I. - Blue'
-        dependent = pd.Series(self.lcps["manoeuvrability"].loc[flag, "cost"])
-        independent = pd.DataFrame({i: self.lcps[i].loc[flag, "cost"] for i in ('slope','ground_conditions','avenues_of_approach','rifle_viewsheds','machine_gun_viewsheds')})
-        independent['viewsheds'] = independent[['rifle_viewsheds','machine_gun_viewsheds']].apply(lambda row: sum(row.values) / 2, axis=1)
-        independent.drop(columns=['rifle_viewsheds','machine_gun_viewsheds'], inplace=True)
-        independent = add_constant(independent)
-        new_model = OLS(endog=dependent, exog=independent).fit()
-        print(new_model.params, new_model.rsquared)
-
-        # show new model vif
-        X = new_model.model.exog
-        vif = pd.DataFrame({'variable': new_model.model.exog_names,
-                            'vif': [variance_inflation_factor(X, i) for i in range(X.shape[1])]})
-        print(vif)
-
-        # TODO - testing multicollinearity
-
     def gen_equations(self, equal_coeff: bool = False) -> pd.DataFrame:
         """
-        Creates an equation for each group and aggregated manoeuvrability indicator.
+        Creates an equation for each group and aggregated manoeuvrability indicator. Uses OLS regression for equally
+        weighted models and ridge regression for regression-optimized models.
 
         :param bool equal_coeff: Indicates if coefficients are to be equal. Default = False.
         :return pd.DataFrame: DataFrame containing equation components and evaluation metrics.
@@ -266,7 +257,7 @@ class RegressionAnova:
         # Configure output DataFrame.
         groups, agg_indicators = zip(*product(set(self.lcps["slope"]["group"]), set(self.dependencies)))
         dst_cols = ("r2", "mae", "const", "slope", "ground_conditions", "avenues_of_approach", "rifle_viewsheds",
-                    "machine_gun_viewsheds")
+                    "machine_gun_viewsheds", "viewsheds")
         results = pd.DataFrame({"group": groups, "agg_indicator": agg_indicators,
                                 **{col: [None] * len(groups) for col in dst_cols}})
 
@@ -295,9 +286,37 @@ class RegressionAnova:
                     indicators_ = [i for i in indicators if group in self.pvalues[i]]
                     independent = pd.DataFrame({i: self.lcps[i].loc[flag_group, "cost"] for i in indicators_})
 
-                # Add constant and fit regression model.
-                independent = add_constant(independent)
-                model = OLS(endog=dependent, exog=independent).fit()
+                # Aggregate viewshed indicators via mean, if applicable to current aggregated indicator.
+                # Note: Indicators adjustment recommended due to extreme multicollinearity after manual inspection.
+                viewshed_indicators = [col for col in independent.columns if col.endswith("_viewsheds")]
+                if (len(viewshed_indicators) > 1) and (agg_indicators == "manoeuvrability"):
+
+                    # Aggregate indicators.
+                    independent["viewsheds"] = independent[viewshed_indicators].mean(axis=1)
+                    independent.drop(columns=viewshed_indicators, inplace=True)
+
+                # Regression - equally weighted.
+                if equal_coeff:
+
+                    # Add constant and fit regression model.
+                    independent = add_constant(independent)
+                    model = OLS(endog=dependent, exog=independent).fit()
+
+                # Regression - regression-optimized.
+                else:
+
+                    # Determine best alpha value for ridge regression.
+                    x_train, x_test, y_train, y_test = train_test_split(independent.values, dependent.values,
+                                                                        test_size=0.2, random_state=42, shuffle=True)
+                    alpha_best = RidgeCV(alphas=np.logspace(start=-3, stop=3, num=100, endpoint=True),
+                                         fit_intercept=True).fit(X=x_train, y=y_train).alpha_
+
+                    # Fit ridge regression model.
+                    model = RidgeCV(alphas=[alpha_best], fit_intercept=True)
+                    model.fit(X=x_train, y=y_train)
+
+                    # Convert RidgeCV model to OLS model.
+                    model = RidgeOLS(ridge_model=model, dependent=dependent, independent=independent)
 
                 # Store model for ANOVA usage.
                 if equal_coeff:
@@ -305,26 +324,17 @@ class RegressionAnova:
                 else:
                     self.models_optimized[group][agg_indicator] = model
 
-                # Add equation coefficients and constant to results.
+                # Add equation components to results.
                 flag_record = (results["group"] == group) & (results["agg_indicator"] == agg_indicator)
 
-                # Coefficients - equally weighted.
-                if equal_coeff:
-                    results.loc[flag_record, "const"] = round(model.params["const"], 4)
-                    for indicator in indicators:
-                        results.loc[flag_record, indicator] = round(model.params[0], 4)
+                # Add constant and coefficients.
+                results.loc[flag_record, "const"] = round(model.params["const"], 4)
+                for name, coefficient in model.params.items():
+                    results.loc[flag_record, name] = round(coefficient, 4)
 
-                # Coefficients - regression-optimized.
-                else:
-                    for name, coefficient in model.params.items():
-                        results.loc[flag_record, name] = round(coefficient, 4)
-
-                # Add r-squared to results.
+                # Add model evaluation metrics - r-squared and mean absolute error.
                 results.loc[flag_record, "r2"] = round(model.rsquared, 4)
-
-                # Add mean absolute error to results.
-                predicted = model.predict(independent)
-                results.loc[flag_record, "mae"] = round(np.mean(np.abs(dependent - predicted)), 4)
+                results.loc[flag_record, "mae"] = round(np.mean(np.abs(dependent - model.predict(independent))), 4)
 
         return results
 
