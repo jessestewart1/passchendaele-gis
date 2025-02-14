@@ -10,8 +10,8 @@ from sklearn.linear_model import RidgeCV
 from sklearn.model_selection import train_test_split
 from sqlalchemy import create_engine
 from statsmodels.api import OLS
-from statsmodels.stats import multicomp
 from statsmodels.stats.anova import anova_lm
+from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from statsmodels.stats.multitest import multipletests
 from statsmodels.tools import add_constant
 from tqdm import tqdm
@@ -84,12 +84,12 @@ class RegressionAnova:
         self.dst_df_equations_optimized = pd.DataFrame()
         self.dst_equations_equal = Path(src.parent / "equations_equally_weighted.csv")
         self.dst_equations_optimized = Path(src.parent / "equations_regression_optimized.csv")
-        self.dst_df_anova_equal = pd.DataFrame()
-        self.dst_df_anova_optimized = pd.DataFrame()
-        self.dst_df_anova_between = pd.DataFrame()
-        self.dst_anova_equal = Path(src.parent / "anova_equally_weighted.csv")
-        self.dst_anova_optimized = Path(src.parent / "anova_regression_optimized.csv")
-        self.dst_anova_between = Path(src.parent / "anova_between.csv")
+        self.dst_df_tukey_equal = pd.DataFrame()
+        self.dst_df_tukey_optimized = pd.DataFrame()
+        self.dst_df_anova = pd.DataFrame()
+        self.dst_tukey_equal = Path(src.parent / "tukeys_hsd_equally_weighted.csv")
+        self.dst_tukey_optimized = Path(src.parent / "tukeys_hsd_regression_optimized.csv")
+        self.dst_anova = Path(src.parent / "anova.csv")
         self.models_equal = defaultdict(dict)
         self.models_optimized = defaultdict(dict)
         self.lcps = dict()
@@ -135,8 +135,9 @@ class RegressionAnova:
         self.dst_df_equations_equal = self.gen_equations(equal_coeff=True)
         self.dst_df_equations_optimized = self.gen_equations(equal_coeff=False)
 
-        # Perform and compile results of ANOVA.
+        # Perform and compile results of ANOVA and Tukey's HSD.
         self.anova()
+        self.tukeys_hsd()
 
         # Export results.
         self.dst_df_equations_equal.to_csv(self.dst_equations_equal, sep=",", header=True, index=False)
@@ -145,93 +146,34 @@ class RegressionAnova:
         self.dst_df_equations_optimized.to_csv(self.dst_equations_optimized, sep=",", header=True, index=False)
         logger.info(f"Exported results to: {self.dst_equations_optimized}.")
 
-        self.dst_df_anova_equal.to_csv(self.dst_anova_equal, sep=",", header=True, index=False)
-        logger.info(f"Exported results to: {self.dst_anova_equal}.")
+        self.dst_df_tukey_equal.to_csv(self.dst_tukey_equal, sep=",", header=True, index=False)
+        logger.info(f"Exported results to: {self.dst_tukey_equal}.")
 
-        self.dst_df_anova_optimized.to_csv(self.dst_anova_optimized, sep=",", header=True, index=False)
-        logger.info(f"Exported results to: {self.dst_anova_optimized}.")
+        self.dst_df_tukey_optimized.to_csv(self.dst_tukey_optimized, sep=",", header=True, index=False)
+        logger.info(f"Exported results to: {self.dst_tukey_optimized}.")
 
-        self.dst_df_anova_between.to_csv(self.dst_anova_between, sep=",", header=True, index=False)
-        logger.info(f"Exported results to: {self.dst_anova_between}.")
+        self.dst_df_anova.to_csv(self.dst_anova, sep=",", header=True, index=False)
+        logger.info(f"Exported results to: {self.dst_anova}.")
 
     def anova(self) -> None:
         """
-        Performs ANOVA for each group and aggregated manoeuvrability indicator for each of the following:
-            1. ANOVA between each group combination using equally weighted models.
-            2. ANOVA between each group combination using regression-optimized models.
-            3. ANOVA between the equally weighted and regression-optimized models for each group.
+        Performs ANOVA between the equally weighted and regression-optimized models for each group and aggregated
+        manoeuvrability indicator.
         """
 
-        logger.info("Performing ANOVA.")
-
-        # Configure groups and group-pair-indicator combinations.
+        # Configure groups and group-indicator combinations.
         groups = set(self.lcps["slope"]["group"])
         group_indicator_combos = tuple(product(groups, set(self.dependencies)))
-        group_pair_indicator_combos = tuple(product(combinations(groups, 2), set(self.dependencies)))
-
-        # ANOVA - Equally weighted models.
-        # TODO - use tukeys hsd - currently uses anova
 
         # Create output DataFrame.
-        self.dst_df_anova_equal = pd.DataFrame({
-            "group_a": [vals[0][0] for vals in group_pair_indicator_combos],
-            "group_b": [vals[0][1] for vals in group_pair_indicator_combos],
-            "agg_indicator": [vals[1] for vals in group_pair_indicator_combos],
-            **{col: [0.0] * len(group_pair_indicator_combos) for col in ("fstat", "pvalue")}
-        })
-
-        # Iterate aggregated indicators and group combinations.
-        for iter_params in tqdm(group_pair_indicator_combos, desc="Performing ANOVA for equally weighted models"):
-            group_a, group_b, agg_indicator = iter_params[0][0], iter_params[0][1], iter_params[1]
-
-            # Perform ANOVA.
-            anova = anova_lm(self.models_equal[group_a][agg_indicator],
-                             self.models_equal[group_b][agg_indicator], test="F", typ=1)
-
-            # Store results.
-            flag_record = (self.dst_df_anova_equal["group_a"] == group_a) & \
-                          (self.dst_df_anova_equal["group_b"] == group_b) & \
-                          (self.dst_df_anova_equal["agg_indicator"] == agg_indicator)
-            self.dst_df_anova_equal.loc[flag_record, "fstat"] = anova.iloc[1]["F"]
-            self.dst_df_anova_equal.loc[flag_record, "pvalue"] = anova.iloc[1]["Pr(>F)"]
-
-        # ANOVA - Regression-optimized models.
-        # TODO - use tukeys hsd - currently uses anova
-
-        # Create output DataFrame.
-        self.dst_df_anova_optimized = pd.DataFrame({
-            "group_a": [vals[0][0] for vals in group_pair_indicator_combos],
-            "group_b": [vals[0][1] for vals in group_pair_indicator_combos],
-            "agg_indicator": [vals[1] for vals in group_pair_indicator_combos],
-            **{col: [0.0] * len(group_pair_indicator_combos) for col in ("fstat", "pvalue")}
-        })
-
-        # Iterate aggregated indicators and group combinations.
-        for iter_params in tqdm(group_pair_indicator_combos, desc="Performing ANOVA for regression-optimized models"):
-            group_a, group_b, agg_indicator = iter_params[0][0], iter_params[0][1], iter_params[1]
-
-            # Perform ANOVA.
-            anova = anova_lm(self.models_optimized[group_a][agg_indicator],
-                             self.models_optimized[group_b][agg_indicator], test="F", typ=1)
-
-            # Store results.
-            flag_record = (self.dst_df_anova_optimized["group_a"] == group_a) & \
-                          (self.dst_df_anova_optimized["group_b"] == group_b) & \
-                          (self.dst_df_anova_optimized["agg_indicator"] == agg_indicator)
-            self.dst_df_anova_optimized.loc[flag_record, "fstat"] = anova.iloc[1]["F"]
-            self.dst_df_anova_optimized.loc[flag_record, "pvalue"] = anova.iloc[1]["Pr(>F)"]
-
-        # ANOVA - Between models.
-
-        # Create output DataFrame.
-        self.dst_df_anova_between = pd.DataFrame({
+        self.dst_df_anova = pd.DataFrame({
             "group": [vals[0] for vals in group_indicator_combos],
             "agg_indicator": [vals[1] for vals in group_indicator_combos],
             **{col: [0.0] * len(group_indicator_combos) for col in ("fstat", "pvalue")}
         })
 
         # Iterate aggregated indicators and groups.
-        for iter_params in tqdm(group_indicator_combos, desc="Performing ANOVA between models"):
+        for iter_params in tqdm(group_indicator_combos, desc="Performing ANOVA"):
             group, agg_indicator = iter_params
 
             # Perform ANOVA.
@@ -239,24 +181,22 @@ class RegressionAnova:
                              self.models_optimized[group][agg_indicator], test="F", typ=1)
 
             # Store results.
-            flag_record = (self.dst_df_anova_between["group"] == group) & \
-                          (self.dst_df_anova_between["agg_indicator"] == agg_indicator)
-            self.dst_df_anova_between.loc[flag_record, "fstat"] = anova.iloc[1]["F"]
-            self.dst_df_anova_between.loc[flag_record, "pvalue"] = anova.iloc[1]["Pr(>F)"]
+            flag_record = (self.dst_df_anova["group"] == group) & (self.dst_df_anova["agg_indicator"] == agg_indicator)
+            self.dst_df_anova.loc[flag_record, "fstat"] = anova.iloc[1]["F"]
+            self.dst_df_anova.loc[flag_record, "pvalue"] = anova.iloc[1]["Pr(>F)"]
 
         # Apply Benjamini-Hochberg procedure for False Discovery Rate (BH-FDR) control.
         for agg_indicator in tqdm(set([vals[1] for vals in group_indicator_combos]), desc="Applying BH-FDR correction"):
 
             # Compile pvalues.
-            flag_records = (self.dst_df_anova_between["agg_indicator"] == agg_indicator) & \
-                           (~self.dst_df_anova_between["pvalue"].isna())
-            pvalues = self.dst_df_anova_between.loc[flag_records, "pvalue"].values
+            flag_records = (self.dst_df_anova["agg_indicator"] == agg_indicator) & (~self.dst_df_anova["pvalue"].isna())
+            pvalues = self.dst_df_anova.loc[flag_records, "pvalue"].values
 
             # Apply BH-FDR control to get corrected pvalues.
             pvalues_corr = multipletests(pvalues, alpha=0.05, method="fdr_bh", is_sorted=False, returnsorted=False)[1]
 
             # Store corrected pvalues.
-            self.dst_df_anova_between.loc[flag_records, "pvalue"] = pvalues_corr
+            self.dst_df_anova.loc[flag_records, "pvalue"] = pvalues_corr
 
     def gen_equations(self, equal_coeff: bool = False) -> pd.DataFrame:
         """
@@ -336,7 +276,7 @@ class RegressionAnova:
                     # Convert RidgeCV model to OLS model.
                     model = RidgeOLS(ridge_model=model, dependent=dependent, independent=independent)
 
-                # Store model for ANOVA usage.
+                # Store model for Tukey's HSD usage.
                 if equal_coeff:
                     self.models_equal[group][agg_indicator] = model
                 else:
@@ -366,6 +306,69 @@ class RegressionAnova:
 
         return results
 
+    def tukeys_hsd(self) -> None:
+        """
+        Performs Tukey's HSD between each group combination (pairwise) using equally weighted models and regression-
+        optimized models, for each aggregated manoeuvrability indicator.
+        """
+
+        # Configure groups and group-pair-indicator combinations.
+        groups = set(self.lcps["slope"]["group"])
+        group_pair_indicator_combos = tuple(product(combinations(groups, 2), set(self.dependencies)))
+
+        # Tukey's HSD - Equally weighted models.
+        # TODO - use tukeys hsd - currently uses anova
+
+        # Create output DataFrame.
+        self.dst_df_tukey_equal = pd.DataFrame({
+            "group_a": [vals[0][0] for vals in group_pair_indicator_combos],
+            "group_b": [vals[0][1] for vals in group_pair_indicator_combos],
+            "agg_indicator": [vals[1] for vals in group_pair_indicator_combos],
+            **{col: [0.0] * len(group_pair_indicator_combos) for col in ("mean_diff", "pvalue", "ci_lower", "ci_upper")}
+        })
+
+        # Iterate aggregated indicators and group combinations.
+        for iter_params in tqdm(group_pair_indicator_combos, desc="Performing Tukey's HSD for equally weighted models"):
+            group_a, group_b, agg_indicator = iter_params[0][0], iter_params[0][1], iter_params[1]
+
+            # Perform Tukey's HSD.
+            anova = anova_lm(self.models_equal[group_a][agg_indicator],
+                             self.models_equal[group_b][agg_indicator], test="F", typ=1)
+
+            # Store results.
+            flag_record = (self.dst_df_tukey_equal["group_a"] == group_a) & \
+                          (self.dst_df_tukey_equal["group_b"] == group_b) & \
+                          (self.dst_df_tukey_equal["agg_indicator"] == agg_indicator)
+            self.dst_df_tukey_equal.loc[flag_record, "fstat"] = anova.iloc[1]["F"]
+            self.dst_df_tukey_equal.loc[flag_record, "pvalue"] = anova.iloc[1]["Pr(>F)"]
+
+        # Tukey's HSD - Regression-optimized models.
+        # TODO - use tukeys hsd - currently uses anova
+
+        # Create output DataFrame.
+        self.dst_df_tukey_optimized = pd.DataFrame({
+            "group_a": [vals[0][0] for vals in group_pair_indicator_combos],
+            "group_b": [vals[0][1] for vals in group_pair_indicator_combos],
+            "agg_indicator": [vals[1] for vals in group_pair_indicator_combos],
+            **{col: [0.0] * len(group_pair_indicator_combos) for col in ("mean_diff", "pvalue", "ci_lower", "ci_upper")}
+        })
+
+        # Iterate aggregated indicators and group combinations.
+        for iter_params in tqdm(group_pair_indicator_combos, desc="Performing Tukey's HSD for regression-optimized "
+                                                                  "models"):
+            group_a, group_b, agg_indicator = iter_params[0][0], iter_params[0][1], iter_params[1]
+
+            # Perform Tukey's HSD.
+            anova = anova_lm(self.models_optimized[group_a][agg_indicator],
+                             self.models_optimized[group_b][agg_indicator], test="F", typ=1)
+
+            # Store results.
+            flag_record = (self.dst_df_tukey_optimized["group_a"] == group_a) & \
+                          (self.dst_df_tukey_optimized["group_b"] == group_b) & \
+                          (self.dst_df_tukey_optimized["agg_indicator"] == agg_indicator)
+            self.dst_df_tukey_optimized.loc[flag_record, "fstat"] = anova.iloc[1]["F"]
+            self.dst_df_tukey_optimized.loc[flag_record, "pvalue"] = anova.iloc[1]["Pr(>F)"]
+
 
 @click.command()
 @click.argument("src", type=click.Path(exists=True, file_okay=True, dir_okay=False, resolve_path=True, path_type=Path))
@@ -391,23 +394,25 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
     and aggregated indicator; equally weighted models will sum all indicators used for the given aggregated indicator
     to produce models with identical coefficients.
 
-    Regression model outputs are used to perform Analysis of Variance (ANOVA) for each group and aggregated
-    manoeuvrability indicator for each of the following:
-        1. ANOVA between each group combination using equally weighted models.
-        2. ANOVA between each group combination using regression-optimized models.
-        3. ANOVA between the equally weighted and regression-optimized models for each group.
+    Regression model outputs are used to perform the following:
+        1. Analysis of Variance (ANOVA) between the equally weighted and regression-optimized models for each group and
+           aggregated manoeuvrability indicator.
+        2. Tukey's Honest Significance Test (Tukey's HSD) between each group combination (pairwise) using equally
+           weighted models for each aggregated manoeuvrability indicator.
+        3. Tukey's Honest Significance Test (Tukey's HSD) between each group combination (pairwise) using regression-
+           optimized models for each aggregated manoeuvrability indicator.
 
     \b
-    Output: Outputs five .csv files within the same directory the source pvalue CSVs:
+    Output files: Outputs five .csv files within the same directory the source pvalue CSVs:
         1. equations_equally_weighted.csv: Equally weighted equations and evaluation metrics.
         2. equations_regression_optimized.csv: Regression-optimized equations and evaluation metrics.
-        3. anova_equally_weighted.csv: ANOVA results for equally weighted models.
-        3. anova_regression_optimized.csv: ANOVA results for regression-optimized models.
-        3. anova_between.csv: ANOVA results for equally weighted vs. regression-optimized models.
+        3. anova.csv: ANOVA results.
+        4. tukeys_hsd_equally_weighted.csv: Tukey's HSD results for equally weighted models.
+        5. tukeys_hsd_regression_optimized.csv: Tukey's HSD results for regression-optimized models.
 
-    Each equations output file will contain the following attributes:
+    Equation output file attributes:
         - group: Group name.
-        - agg_indicator: Name of the aggregated manoeuvrability indicator that the equation is for.
+        - agg_indicator: Aggregated manoeuvrability indicator.
         - r2: Coefficient of determination for equation.
         - mae: Mean absolute error for equation.
         - const: Y-intercept of equation.
@@ -418,13 +423,20 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
         - machine_gun_viewsheds: Coefficient for machine_gun_viewsheds variable (except manoeuvrability agg. indicator).
         - viewsheds: Coefficient for mean-aggregated viewshed variables (manoeuvrability agg. indicator only).
 
-    Each ANOVA output file will contain the following attributes:
-        - group: Group name (anova_between only).
-        - group_a: First group name (anova_equally_weighted and anova_regression_optimized only).
-        - group_b: Second group name (anova_equally_weighted and anova_regression_optimized only).
-        - agg_indicator: Name of the aggregated manoeuvrability indicator that the ANOVA results are for.
+    ANOVA output file attributes:
+        - group: Group name.
+        - agg_indicator: Aggregated manoeuvrability indicator.
         - fstat: F-statistic.
         - pvalue: P-value for significance testing.
+
+    Tukey's HSD output file attributes:
+        - group_a: First group name in the pairwise analysis.
+        - group_b: Second group name in the pairwise analysis.
+        - agg_indicator: Aggregated manoeuvrability indicator.
+        - mean_diff: Difference in means between the groups.
+        - pvalue: P-value for significance testing.
+        - ci_lower: Lower confidence interval (95%).
+        - ci_upper: Upper confidence interval (95%).
 
     \b
     Assumptions:
