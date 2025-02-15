@@ -359,7 +359,7 @@ class RegressionAnova:
                                   (tukeys_results["group2"] == group_pair[0]))
 
                     flag_dst = (results["group_a"] == group_pair[0]) & \
-                               (results["group_a"] == group_pair[1]) & \
+                               (results["group_b"] == group_pair[1]) & \
                                (results["agg_indicator"] == agg_indicator)
 
                     results.loc[flag_dst, "mean_diff"] = round(tukeys_results.loc[flag_tukey, "meandiff"].iloc[0], 4)
