@@ -1,10 +1,14 @@
+import matplotlib.pyplot as plt
+
+
+
 import click
 import logging
 import numpy as np
 import pandas as pd
 import sys
 from collections import defaultdict
-from itertools import combinations, product
+from itertools import chain, combinations, product
 from pathlib import Path
 from sklearn.linear_model import RidgeCV
 from sklearn.model_selection import train_test_split
@@ -314,60 +318,65 @@ class RegressionAnova:
 
         # Configure groups and group-pair-indicator combinations.
         groups = set(self.lcps["slope"]["group"])
-        group_pair_indicator_combos = tuple(product(combinations(groups, 2), set(self.dependencies)))
+        groups_indicator_combos = tuple(product(combinations(groups, 2), set(self.dependencies)))
 
-        # Tukey's HSD - Equally weighted models.
-        # TODO - use tukeys hsd - currently uses anova
+        # Iterate model types.
+        for model_type in ("equally weighted", "regression-optimized"):
 
-        # Create output DataFrame.
-        self.dst_df_tukey_equal = pd.DataFrame({
-            "group_a": [vals[0][0] for vals in group_pair_indicator_combos],
-            "group_b": [vals[0][1] for vals in group_pair_indicator_combos],
-            "agg_indicator": [vals[1] for vals in group_pair_indicator_combos],
-            **{col: [0.0] * len(group_pair_indicator_combos) for col in ("mean_diff", "pvalue", "ci_lower", "ci_upper")}
-        })
+            # Compile models.
+            models = {"equally weighted": self.models_equal, "regression-optimized": self.models_optimized}[model_type]
 
-        # Iterate aggregated indicators and group combinations.
-        for iter_params in tqdm(group_pair_indicator_combos, desc="Performing Tukey's HSD for equally weighted models"):
-            group_a, group_b, agg_indicator = iter_params[0][0], iter_params[0][1], iter_params[1]
+            # Create output DataFrame.
+            results = pd.DataFrame({
+                "group_a": [vals[0][0] for vals in groups_indicator_combos],
+                "group_b": [vals[0][1] for vals in groups_indicator_combos],
+                "agg_indicator": [vals[1] for vals in groups_indicator_combos],
+                **{col: [0.0] * len(groups_indicator_combos) for col in ("mean_diff", "pvalue", "ci_lower", "ci_upper")}
+            })
 
-            # Perform Tukey's HSD.
-            anova = anova_lm(self.models_equal[group_a][agg_indicator],
-                             self.models_equal[group_b][agg_indicator], test="F", typ=1)
+            # Iterate aggregated indicators and group combinations.
+            for agg_indicator in tqdm(self.dependencies, desc=f"Performing Tukey's HSD for {model_type} models"):
 
-            # Store results.
-            flag_record = (self.dst_df_tukey_equal["group_a"] == group_a) & \
-                          (self.dst_df_tukey_equal["group_b"] == group_b) & \
-                          (self.dst_df_tukey_equal["agg_indicator"] == agg_indicator)
-            self.dst_df_tukey_equal.loc[flag_record, "fstat"] = anova.iloc[1]["F"]
-            self.dst_df_tukey_equal.loc[flag_record, "pvalue"] = anova.iloc[1]["Pr(>F)"]
+                # Generate single DataFrame containing model residuals for all groups.
+                residuals = {group: models[group][agg_indicator].resid for group in groups}
+                df_resid = pd.DataFrame({
+                    "residuals": chain.from_iterable(residuals.values()),
+                    "group": chain.from_iterable([group] * len(residuals[group]) for group in residuals)})
 
-        # Tukey's HSD - Regression-optimized models.
-        # TODO - use tukeys hsd - currently uses anova
+                # Perform Tukey's HSD.
+                tukeys = pairwise_tukeyhsd(endog=df_resid["residuals"], groups=df_resid["group"], alpha=self.alpha)
 
-        # Create output DataFrame.
-        self.dst_df_tukey_optimized = pd.DataFrame({
-            "group_a": [vals[0][0] for vals in group_pair_indicator_combos],
-            "group_b": [vals[0][1] for vals in group_pair_indicator_combos],
-            "agg_indicator": [vals[1] for vals in group_pair_indicator_combos],
-            **{col: [0.0] * len(group_pair_indicator_combos) for col in ("mean_diff", "pvalue", "ci_lower", "ci_upper")}
-        })
+                # Compile results as DataFrame.
+                tukeys_results = pd.DataFrame(tukeys.summary().data[1:], columns=tukeys.summary()[0])
+                tukeys_results.columns = ["group1", "group2", "meandiff", "lower", "upper", "p-adj", "reject"]
 
-        # Iterate aggregated indicators and group combinations.
-        for iter_params in tqdm(group_pair_indicator_combos, desc="Performing Tukey's HSD for regression-optimized "
-                                                                  "models"):
-            group_a, group_b, agg_indicator = iter_params[0][0], iter_params[0][1], iter_params[1]
+                # Store results.
+                for group_pair in [vals[0] for vals in groups_indicator_combos if vals[1] == agg_indicator]:
 
-            # Perform Tukey's HSD.
-            anova = anova_lm(self.models_optimized[group_a][agg_indicator],
-                             self.models_optimized[group_b][agg_indicator], test="F", typ=1)
+                    flag_tukey = ((tukeys_results["group1"] == group_pair[0]) &
+                                  (tukeys_results["group2"] == group_pair[1])) | \
+                                 ((tukeys_results["group1"] == group_pair[1]) &
+                                  (tukeys_results["group2"] == group_pair[0]))
 
-            # Store results.
-            flag_record = (self.dst_df_tukey_optimized["group_a"] == group_a) & \
-                          (self.dst_df_tukey_optimized["group_b"] == group_b) & \
-                          (self.dst_df_tukey_optimized["agg_indicator"] == agg_indicator)
-            self.dst_df_tukey_optimized.loc[flag_record, "fstat"] = anova.iloc[1]["F"]
-            self.dst_df_tukey_optimized.loc[flag_record, "pvalue"] = anova.iloc[1]["Pr(>F)"]
+                    flag_dst = (results["group_a"] == group_pair[0]) & \
+                               (results["group_a"] == group_pair[1]) & \
+                               (results["agg_indicator"] == agg_indicator)
+
+                    results.loc[flag_dst, "mean_diff"] = round(tukeys_results.loc[flag_tukey, "meandiff"].iloc[0], 4)
+                    results.loc[flag_dst, "pvalue"] = round(tukeys_results.loc[flag_tukey, "p-adj"].iloc[0], 4)
+                    results.loc[flag_dst, "ci_lower"] = round(tukeys_results.loc[flag_tukey, "lower"].iloc[0], 4)
+                    results.loc[flag_dst, "ci_upper"] = round(tukeys_results.loc[flag_tukey, "upper"].iloc[0], 4)
+
+                # TODO - also try plotting results as per chatgpt just to see
+                tukeys.plot_simultaneous()
+                plt.show()
+                # TODO - end of notes
+
+            # Store final results.
+            if model_type == "equally weighted":
+                self.dst_df_tukey_equal = results.copy(deep=True)
+            else:
+                self.dst_df_tukey_optimized = results.copy(deep=True)
 
 
 @click.command()
