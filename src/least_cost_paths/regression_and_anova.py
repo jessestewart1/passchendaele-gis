@@ -1,7 +1,3 @@
-import matplotlib.pyplot as plt
-
-
-
 import click
 import logging
 import numpy as np
@@ -10,12 +6,12 @@ import sys
 from collections import defaultdict
 from itertools import chain, combinations, product
 from pathlib import Path
+from pingouin import pairwise_gameshowell
 from sklearn.linear_model import RidgeCV
 from sklearn.model_selection import train_test_split
 from sqlalchemy import create_engine
 from statsmodels.api import OLS
 from statsmodels.stats.anova import anova_lm
-from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from statsmodels.stats.multitest import multipletests
 from statsmodels.tools import add_constant
 from tqdm import tqdm
@@ -47,7 +43,7 @@ class RidgeOLS:
         self.df_model = independent.shape[1]
         self.df_resid = self.nobs - (self.df_model + 1)
         self.fitted_values = ridge_model.predict(independent)
-        self.residuals = dependent - self.fittedvalues
+        self.residuals = dependent - self.fitted_values
         self.ssr = np.sum(self.resid ** 2)
         self.sst = np.sum((dependent - np.mean(dependent)) ** 2)
         self.rsquared = 1 - (self.ssr / self.sst)
@@ -88,11 +84,11 @@ class RegressionAnova:
         self.dst_df_equations_optimized = pd.DataFrame()
         self.dst_equations_equal = Path(src.parent / "equations_equally_weighted.csv")
         self.dst_equations_optimized = Path(src.parent / "equations_regression_optimized.csv")
-        self.dst_df_tukey_equal = pd.DataFrame()
-        self.dst_df_tukey_optimized = pd.DataFrame()
+        self.dst_df_gh_equal = pd.DataFrame()
+        self.dst_df_gh_optimized = pd.DataFrame()
         self.dst_df_anova = pd.DataFrame()
-        self.dst_tukey_equal = Path(src.parent / "tukeys_hsd_equally_weighted.csv")
-        self.dst_tukey_optimized = Path(src.parent / "tukeys_hsd_regression_optimized.csv")
+        self.dst_gh_equal = Path(src.parent / "games_howell_equally_weighted.csv")
+        self.dst_gh_optimized = Path(src.parent / "games_howell_regression_optimized.csv")
         self.dst_anova = Path(src.parent / "anova.csv")
         self.models_equal = defaultdict(dict)
         self.models_optimized = defaultdict(dict)
@@ -139,9 +135,9 @@ class RegressionAnova:
         self.dst_df_equations_equal = self.gen_equations(equal_coeff=True)
         self.dst_df_equations_optimized = self.gen_equations(equal_coeff=False)
 
-        # Perform and compile results of ANOVA and Tukey's HSD.
+        # Perform and compile results of ANOVA and Games-Howell test.
         self.anova()
-        self.tukeys_hsd()
+        self.games_howell()
 
         # Export results.
         self.dst_df_equations_equal.to_csv(self.dst_equations_equal, sep=",", header=True, index=False)
@@ -150,11 +146,11 @@ class RegressionAnova:
         self.dst_df_equations_optimized.to_csv(self.dst_equations_optimized, sep=",", header=True, index=False)
         logger.info(f"Exported results to: {self.dst_equations_optimized}.")
 
-        self.dst_df_tukey_equal.to_csv(self.dst_tukey_equal, sep=",", header=True, index=False)
-        logger.info(f"Exported results to: {self.dst_tukey_equal}.")
+        self.dst_df_gh_equal.to_csv(self.dst_gh_equal, sep=",", header=True, index=False)
+        logger.info(f"Exported results to: {self.dst_gh_equal}.")
 
-        self.dst_df_tukey_optimized.to_csv(self.dst_tukey_optimized, sep=",", header=True, index=False)
-        logger.info(f"Exported results to: {self.dst_tukey_optimized}.")
+        self.dst_df_gh_optimized.to_csv(self.dst_gh_optimized, sep=",", header=True, index=False)
+        logger.info(f"Exported results to: {self.dst_gh_optimized}.")
 
         self.dst_df_anova.to_csv(self.dst_anova, sep=",", header=True, index=False)
         logger.info(f"Exported results to: {self.dst_anova}.")
@@ -201,6 +197,65 @@ class RegressionAnova:
 
             # Store corrected pvalues.
             self.dst_df_anova.loc[flag_records, "pvalue"] = pvalues_corr
+
+    def games_howell(self) -> None:
+        """
+        Performs Games-Howell test between each group combination (pairwise) using equally weighted models and
+        regression-optimized models, for each aggregated manoeuvrability indicator.
+        """
+
+        # Configure groups and group-pair-indicator combinations.
+        groups = set(self.lcps["slope"]["group"])
+        groups_indicator_combos = tuple(product(combinations(groups, 2), set(self.dependencies)))
+
+        # Iterate model types.
+        for model_type in ("equally weighted", "regression-optimized"):
+
+            # Compile models.
+            models = {"equally weighted": self.models_equal, "regression-optimized": self.models_optimized}[model_type]
+
+            # Create output DataFrame.
+            results = pd.DataFrame({
+                "group_a": [vals[0][0] for vals in groups_indicator_combos],
+                "group_b": [vals[0][1] for vals in groups_indicator_combos],
+                "agg_indicator": [vals[1] for vals in groups_indicator_combos],
+                **{col: [0.0] * len(groups_indicator_combos) for col in ("mean_diff", "mean_se", "tstat", "pvalue")}
+            })
+
+            # Iterate aggregated indicators and group combinations.
+            for agg_indicator in tqdm(self.dependencies, desc=f"Performing Games-Howell test for {model_type} models"):
+
+                # Generate single DataFrame containing model residuals (absolute values) for all groups.
+                residuals = {group: np.abs(models[group][agg_indicator].resid) for group in groups}
+                df_resid = pd.DataFrame({
+                    "residuals": chain.from_iterable(residuals.values()),
+                    "group": chain.from_iterable([group] * len(residuals[group]) for group in residuals)})
+
+                # Perform Games-Howell test.
+                gh_results = pairwise_gameshowell(data=df_resid, dv="residuals", between="group")
+                # TODO - Games-Howell works well for showing significance of model effects, supplemenent with boxplots to show coefficient and constant differences (no need for statistical test of model components)
+                # TODO - Check if anova is appropriate for equal vs optimized comparison - abs residuals is not appropriate, keep residuals for anova as-is - try anova with different robust param vals
+
+                # Store results.
+                for group_pair in [vals[0] for vals in groups_indicator_combos if vals[1] == agg_indicator]:
+
+                    flag_test = ((gh_results["A"] == group_pair[0]) & (gh_results["B"] == group_pair[1])) | \
+                                ((gh_results["A"] == group_pair[1]) & (gh_results["B"] == group_pair[0]))
+
+                    flag_dst = (results["group_a"] == group_pair[0]) & \
+                               (results["group_b"] == group_pair[1]) & \
+                               (results["agg_indicator"] == agg_indicator)
+
+                    results.loc[flag_dst, "mean_diff"] = round(gh_results.loc[flag_test, "diff"].iloc[0], 4)
+                    results.loc[flag_dst, "mean_se"] = round(gh_results.loc[flag_test, "se"].iloc[0], 4)
+                    results.loc[flag_dst, "tstat"] = round(gh_results.loc[flag_test, "T"].iloc[0], 4)
+                    results.loc[flag_dst, "pvalue"] = round(gh_results.loc[flag_test, "pval"].iloc[0], 4)
+
+            # Store final results.
+            if model_type == "equally weighted":
+                self.dst_df_gh_equal = results.copy(deep=True)
+            else:
+                self.dst_df_gh_optimized = results.copy(deep=True)
 
     def gen_equations(self, equal_coeff: bool = False) -> pd.DataFrame:
         """
@@ -280,7 +335,7 @@ class RegressionAnova:
                     # Convert RidgeCV model to OLS model.
                     model = RidgeOLS(ridge_model=model, dependent=dependent, independent=independent)
 
-                # Store model for Tukey's HSD usage.
+                # Store model for Games-Howell test usage.
                 if equal_coeff:
                     self.models_equal[group][agg_indicator] = model
                 else:
@@ -310,74 +365,6 @@ class RegressionAnova:
 
         return results
 
-    def tukeys_hsd(self) -> None:
-        """
-        Performs Tukey's HSD between each group combination (pairwise) using equally weighted models and regression-
-        optimized models, for each aggregated manoeuvrability indicator.
-        """
-
-        # Configure groups and group-pair-indicator combinations.
-        groups = set(self.lcps["slope"]["group"])
-        groups_indicator_combos = tuple(product(combinations(groups, 2), set(self.dependencies)))
-
-        # Iterate model types.
-        for model_type in ("equally weighted", "regression-optimized"):
-
-            # Compile models.
-            models = {"equally weighted": self.models_equal, "regression-optimized": self.models_optimized}[model_type]
-
-            # Create output DataFrame.
-            results = pd.DataFrame({
-                "group_a": [vals[0][0] for vals in groups_indicator_combos],
-                "group_b": [vals[0][1] for vals in groups_indicator_combos],
-                "agg_indicator": [vals[1] for vals in groups_indicator_combos],
-                **{col: [0.0] * len(groups_indicator_combos) for col in ("mean_diff", "pvalue", "ci_lower", "ci_upper")}
-            })
-
-            # Iterate aggregated indicators and group combinations.
-            for agg_indicator in tqdm(self.dependencies, desc=f"Performing Tukey's HSD for {model_type} models"):
-
-                # Generate single DataFrame containing model residuals for all groups.
-                residuals = {group: models[group][agg_indicator].resid for group in groups}
-                df_resid = pd.DataFrame({
-                    "residuals": chain.from_iterable(residuals.values()),
-                    "group": chain.from_iterable([group] * len(residuals[group]) for group in residuals)})
-
-                # Perform Tukey's HSD.
-                tukeys = pairwise_tukeyhsd(endog=df_resid["residuals"], groups=df_resid["group"], alpha=self.alpha)
-
-                # Compile results as DataFrame.
-                tukeys_results = pd.DataFrame(tukeys.summary().data[1:], columns=tukeys.summary()[0])
-                tukeys_results.columns = ["group1", "group2", "meandiff", "lower", "upper", "p-adj", "reject"]
-
-                # Store results.
-                for group_pair in [vals[0] for vals in groups_indicator_combos if vals[1] == agg_indicator]:
-
-                    flag_tukey = ((tukeys_results["group1"] == group_pair[0]) &
-                                  (tukeys_results["group2"] == group_pair[1])) | \
-                                 ((tukeys_results["group1"] == group_pair[1]) &
-                                  (tukeys_results["group2"] == group_pair[0]))
-
-                    flag_dst = (results["group_a"] == group_pair[0]) & \
-                               (results["group_b"] == group_pair[1]) & \
-                               (results["agg_indicator"] == agg_indicator)
-
-                    results.loc[flag_dst, "mean_diff"] = round(tukeys_results.loc[flag_tukey, "meandiff"].iloc[0], 4)
-                    results.loc[flag_dst, "pvalue"] = round(tukeys_results.loc[flag_tukey, "p-adj"].iloc[0], 4)
-                    results.loc[flag_dst, "ci_lower"] = round(tukeys_results.loc[flag_tukey, "lower"].iloc[0], 4)
-                    results.loc[flag_dst, "ci_upper"] = round(tukeys_results.loc[flag_tukey, "upper"].iloc[0], 4)
-
-                # TODO - also try plotting results as per chatgpt just to see
-                tukeys.plot_simultaneous()
-                plt.show()
-                # TODO - end of notes
-
-            # Store final results.
-            if model_type == "equally weighted":
-                self.dst_df_tukey_equal = results.copy(deep=True)
-            else:
-                self.dst_df_tukey_optimized = results.copy(deep=True)
-
 
 @click.command()
 @click.argument("src", type=click.Path(exists=True, file_okay=True, dir_okay=False, resolve_path=True, path_type=Path))
@@ -406,18 +393,18 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
     Regression model outputs are used to perform the following:
         1. Analysis of Variance (ANOVA) between the equally weighted and regression-optimized models for each group and
            aggregated manoeuvrability indicator.
-        2. Tukey's Honest Significance Test (Tukey's HSD) between each group combination (pairwise) using equally
-           weighted models for each aggregated manoeuvrability indicator.
-        3. Tukey's Honest Significance Test (Tukey's HSD) between each group combination (pairwise) using regression-
-           optimized models for each aggregated manoeuvrability indicator.
+        2. Games-Howell Test between each group combination (pairwise) using equally weighted models for each
+           aggregated manoeuvrability indicator.
+        3. Games-Howell Test between each group combination (pairwise) using regression-optimized models for each
+           aggregated manoeuvrability indicator.
 
     \b
     Output files: Outputs five .csv files within the same directory the source pvalue CSVs:
         1. equations_equally_weighted.csv: Equally weighted equations and evaluation metrics.
         2. equations_regression_optimized.csv: Regression-optimized equations and evaluation metrics.
         3. anova.csv: ANOVA results.
-        4. tukeys_hsd_equally_weighted.csv: Tukey's HSD results for equally weighted models.
-        5. tukeys_hsd_regression_optimized.csv: Tukey's HSD results for regression-optimized models.
+        4. games_howell_equally_weighted.csv: Games-Howell test results for equally weighted models.
+        5. games_howell_regression_optimized.csv: Games-Howell test results for regression-optimized models.
 
     Equation output file attributes:
         - group: Group name.
@@ -435,17 +422,17 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
     ANOVA output file attributes:
         - group: Group name.
         - agg_indicator: Aggregated manoeuvrability indicator.
-        - fstat: F-statistic.
+        - fstat: F-test value.
         - pvalue: P-value for significance testing.
 
-    Tukey's HSD output file attributes:
+    Games-Howell test output file attributes:
         - group_a: First group name in the pairwise analysis.
         - group_b: Second group name in the pairwise analysis.
         - agg_indicator: Aggregated manoeuvrability indicator.
         - mean_diff: Difference in means between the groups.
-        - pvalue: P-value for significance testing.
-        - ci_lower: Lower confidence interval (95%).
-        - ci_upper: Upper confidence interval (95%).
+        - mean_se: Standard error of the mean difference.
+        - tstat: t-test value.
+        - pvalue: Adjusted p-value for significance testing.
 
     \b
     Assumptions:
