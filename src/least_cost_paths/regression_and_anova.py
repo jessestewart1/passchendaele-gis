@@ -2,6 +2,7 @@ import click
 import logging
 import numpy as np
 import pandas as pd
+import scipy.stats as stats
 import sys
 from collections import defaultdict
 from itertools import chain, combinations, product
@@ -219,7 +220,8 @@ class RegressionAnova:
                 "group_a": [vals[0][0] for vals in groups_indicator_combos],
                 "group_b": [vals[0][1] for vals in groups_indicator_combos],
                 "agg_indicator": [vals[1] for vals in groups_indicator_combos],
-                **{col: [0.0] * len(groups_indicator_combos) for col in ("mean_diff", "mean_se", "tstat", "pvalue")}
+                **{col: [0.0] * len(groups_indicator_combos) for col in
+                   ("mean_diff", "mean_se", "tstat", "pvalue", "ci_upper", "ci_lower")}
             })
 
             # Iterate aggregated indicators and group combinations.
@@ -233,8 +235,6 @@ class RegressionAnova:
 
                 # Perform Games-Howell test.
                 gh_results = pairwise_gameshowell(data=df_resid, dv="residuals", between="group")
-                # TODO - Games-Howell works well for showing significance of model effects, supplemenent with boxplots to show coefficient and constant differences (no need for statistical test of model components)
-                # TODO - Check if anova is appropriate for equal vs optimized comparison - abs residuals is not appropriate, keep residuals for anova as-is - try anova with different robust param vals
 
                 # Store results.
                 for group_pair in [vals[0] for vals in groups_indicator_combos if vals[1] == agg_indicator]:
@@ -250,6 +250,12 @@ class RegressionAnova:
                     results.loc[flag_dst, "mean_se"] = round(gh_results.loc[flag_test, "se"].iloc[0], 4)
                     results.loc[flag_dst, "tstat"] = round(gh_results.loc[flag_test, "T"].iloc[0], 4)
                     results.loc[flag_dst, "pvalue"] = round(gh_results.loc[flag_test, "pval"].iloc[0], 4)
+
+                    # Calculate confidence intervals manually - store results.
+                    df_, diff_, se_ = gh_results.loc[flag_test, ["df", "diff", "se"]].iloc[0].values
+                    t_critical = stats.t.ppf(q=0.975, df=df_)
+                    results.loc[flag_dst, "ci_lower"] = diff_ - (t_critical * se_)
+                    results.loc[flag_dst, "ci_upper"] = diff_ + (t_critical * se_)
 
             # Store final results.
             if model_type == "equally weighted":
