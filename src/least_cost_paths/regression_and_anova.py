@@ -396,6 +396,7 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
     and aggregated indicator; equally weighted models will sum all indicators used for the given aggregated indicator
     to produce models with identical coefficients.
 
+    \b
     Regression model outputs are used to perform the following:
         1. Analysis of Variance (ANOVA) between the equally weighted and regression-optimized models for each group and
            aggregated manoeuvrability indicator.
@@ -412,6 +413,7 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
         4. games_howell_equally_weighted.csv: Games-Howell test results for equally weighted models.
         5. games_howell_regression_optimized.csv: Games-Howell test results for regression-optimized models.
 
+    \b
     Equation output file attributes:
         - group: Group name.
         - agg_indicator: Aggregated manoeuvrability indicator.
@@ -425,12 +427,14 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
         - machine_gun_viewsheds: Coefficient for machine_gun_viewsheds variable (except manoeuvrability agg. indicator).
         - viewsheds: Coefficient for mean-aggregated viewshed variables (manoeuvrability agg. indicator only).
 
+    \b
     ANOVA output file attributes:
         - group: Group name.
         - agg_indicator: Aggregated manoeuvrability indicator.
         - fstat: F-test value.
         - pvalue: P-value for significance testing.
 
+    \b
     Games-Howell test output file attributes:
         - group_a: First group name in the pairwise analysis.
         - group_b: Second group name in the pairwise analysis.
