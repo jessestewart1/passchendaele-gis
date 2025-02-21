@@ -8,11 +8,11 @@ from collections import defaultdict
 from itertools import chain, combinations, product
 from pathlib import Path
 from pingouin import pairwise_gameshowell
+from scipy.stats import ttest_ind
 from sklearn.linear_model import RidgeCV
 from sklearn.model_selection import train_test_split
 from sqlalchemy import create_engine
 from statsmodels.api import OLS
-from statsmodels.stats.anova import anova_lm
 from statsmodels.stats.multitest import multipletests
 from statsmodels.tools import add_constant
 from tqdm import tqdm
@@ -74,12 +74,12 @@ class RidgeOLS:
         return np.dot(add_constant(independent), self.params)
 
 
-class RegressionAnova:
-    """Defines the RegressionAnova class."""
+class Regression:
+    """Defines the Regression class."""
 
     def __init__(self, src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_avenues_of_approach: Path,
                  pvalue_rifle_viewsheds: Path, pvalue_machine_gun_viewsheds: Path) -> None:
-        """Initializes the RegressionAnova class."""
+        """Initializes the Regression class."""
 
         self.dst_df_equations_equal = pd.DataFrame()
         self.dst_df_equations_optimized = pd.DataFrame()
@@ -87,10 +87,10 @@ class RegressionAnova:
         self.dst_equations_optimized = Path(src.parent / "equations_regression_optimized.csv")
         self.dst_df_gh_equal = pd.DataFrame()
         self.dst_df_gh_optimized = pd.DataFrame()
-        self.dst_df_anova = pd.DataFrame()
+        self.dst_df_welchs = pd.DataFrame()
         self.dst_gh_equal = Path(src.parent / "games_howell_equally_weighted.csv")
         self.dst_gh_optimized = Path(src.parent / "games_howell_regression_optimized.csv")
-        self.dst_anova = Path(src.parent / "anova.csv")
+        self.dst_welchs = Path(src.parent / "welchs_ttest.csv")
         self.models_equal = defaultdict(dict)
         self.models_optimized = defaultdict(dict)
         self.lcps = dict()
@@ -130,14 +130,14 @@ class RegressionAnova:
             self.pvalues[indicator] = set(df.loc[df["pvalue"] <= self.alpha, "group"])
 
     def __call__(self) -> None:
-        """Executes the RegressionAnova class."""
+        """Executes the Regression class."""
 
         # Create equations.
         self.dst_df_equations_equal = self.gen_equations(equal_coeff=True)
         self.dst_df_equations_optimized = self.gen_equations(equal_coeff=False)
 
-        # Perform and compile results of ANOVA and Games-Howell test.
-        self.anova()
+        # Perform and compile results of Welch's t-test and Games-Howell test.
+        self.welchs_ttest()
         self.games_howell()
 
         # Export results.
@@ -153,51 +153,8 @@ class RegressionAnova:
         self.dst_df_gh_optimized.to_csv(self.dst_gh_optimized, sep=",", header=True, index=False)
         logger.info(f"Exported results to: {self.dst_gh_optimized}.")
 
-        self.dst_df_anova.to_csv(self.dst_anova, sep=",", header=True, index=False)
-        logger.info(f"Exported results to: {self.dst_anova}.")
-
-    def anova(self) -> None:
-        """
-        Performs ANOVA between the equally weighted and regression-optimized models for each group and aggregated
-        manoeuvrability indicator.
-        """
-
-        # Configure groups and group-indicator combinations.
-        groups = set(self.lcps["slope"]["group"])
-        group_indicator_combos = tuple(product(groups, set(self.dependencies)))
-
-        # Create output DataFrame.
-        self.dst_df_anova = pd.DataFrame({
-            "group": [vals[0] for vals in group_indicator_combos],
-            "agg_indicator": [vals[1] for vals in group_indicator_combos],
-            **{col: [0.0] * len(group_indicator_combos) for col in ("fstat", "pvalue")}
-        })
-
-        # Iterate aggregated indicators and groups.
-        for iter_params in tqdm(group_indicator_combos, desc="Performing ANOVA"):
-            group, agg_indicator = iter_params
-
-            # Perform ANOVA.
-            anova = anova_lm(self.models_equal[group][agg_indicator],
-                             self.models_optimized[group][agg_indicator], test="F", typ=1)
-
-            # Store results.
-            flag_record = (self.dst_df_anova["group"] == group) & (self.dst_df_anova["agg_indicator"] == agg_indicator)
-            self.dst_df_anova.loc[flag_record, "fstat"] = anova.iloc[1]["F"]
-            self.dst_df_anova.loc[flag_record, "pvalue"] = anova.iloc[1]["Pr(>F)"]
-
-        # Apply Benjamini-Hochberg procedure for False Discovery Rate (BH-FDR) control.
-        for agg_indicator in tqdm(set([vals[1] for vals in group_indicator_combos]), desc="Applying BH-FDR correction"):
-
-            # Compile pvalues.
-            flag_records = (self.dst_df_anova["agg_indicator"] == agg_indicator) & (~self.dst_df_anova["pvalue"].isna())
-            pvalues = self.dst_df_anova.loc[flag_records, "pvalue"].values
-
-            # Apply BH-FDR control to get corrected pvalues.
-            pvalues_corr = multipletests(pvalues, alpha=0.05, method="fdr_bh", is_sorted=False, returnsorted=False)[1]
-
-            # Store corrected pvalues.
-            self.dst_df_anova.loc[flag_records, "pvalue"] = pvalues_corr
+        self.dst_df_welchs.to_csv(self.dst_welchs, sep=",", header=True, index=False)
+        logger.info(f"Exported results to: {self.dst_welchs}.")
 
     def games_howell(self) -> None:
         """
@@ -371,6 +328,51 @@ class RegressionAnova:
 
         return results
 
+    def welchs_ttest(self) -> None:
+        """
+        Performs Welch's t-test between the equally weighted and regression-optimized models for each group and
+        aggregated manoeuvrability indicator.
+        """
+
+        # Configure groups and group-indicator combinations.
+        groups = set(self.lcps["slope"]["group"])
+        group_indicator_combos = tuple(product(groups, set(self.dependencies)))
+
+        # Create output DataFrame.
+        self.dst_df_welchs = pd.DataFrame({
+            "group": [vals[0] for vals in group_indicator_combos],
+            "agg_indicator": [vals[1] for vals in group_indicator_combos],
+            **{col: [0.0] * len(group_indicator_combos) for col in ("tstat", "pvalue")}
+        })
+
+        # Iterate aggregated indicators and groups.
+        for iter_params in tqdm(group_indicator_combos, desc="Performing Welch's t-test"):
+            group, agg_indicator = iter_params
+
+            # Perform Welch's t-test.
+            ttest = ttest_ind(np.abs(self.models_equal[group][agg_indicator].resid),
+                              np.abs(self.models_optimized[group][agg_indicator].resid), equal_var=False)
+
+            # Store results.
+            flag_record = (self.dst_df_welchs["group"] == group) & \
+                          (self.dst_df_welchs["agg_indicator"] == agg_indicator)
+            self.dst_df_welchs.loc[flag_record, "tstat"] = ttest.statistic
+            self.dst_df_welchs.loc[flag_record, "pvalue"] = ttest.pvalue
+
+        # Apply Benjamini-Hochberg procedure for False Discovery Rate (BH-FDR) control.
+        for agg_indicator in tqdm(set([vals[1] for vals in group_indicator_combos]), desc="Applying BH-FDR correction"):
+
+            # Compile pvalues.
+            flag_records = (self.dst_df_welchs["agg_indicator"] == agg_indicator) & \
+                           (~self.dst_df_welchs["pvalue"].isna())
+            pvalues = self.dst_df_welchs.loc[flag_records, "pvalue"].values
+
+            # Apply BH-FDR control to get corrected pvalues.
+            pvalues_corr = multipletests(pvalues, alpha=0.05, method="fdr_bh", is_sorted=False, returnsorted=False)[1]
+
+            # Store corrected pvalues.
+            self.dst_df_welchs.loc[flag_records, "pvalue"] = pvalues_corr
+
 
 @click.command()
 @click.argument("src", type=click.Path(exists=True, file_okay=True, dir_okay=False, resolve_path=True, path_type=Path))
@@ -398,8 +400,8 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
 
     \b
     Regression model outputs are used to perform the following:
-        1. Analysis of Variance (ANOVA) between the equally weighted and regression-optimized models for each group and
-           aggregated manoeuvrability indicator.
+        1. Welch's t-test between the equally weighted and regression-optimized models for each group and aggregated
+           manoeuvrability indicator.
         2. Games-Howell Test between each group combination (pairwise) using equally weighted models for each
            aggregated manoeuvrability indicator.
         3. Games-Howell Test between each group combination (pairwise) using regression-optimized models for each
@@ -409,7 +411,7 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
     Output files: Outputs five .csv files within the same directory the source pvalue CSVs:
         1. equations_equally_weighted.csv: Equally weighted equations and evaluation metrics.
         2. equations_regression_optimized.csv: Regression-optimized equations and evaluation metrics.
-        3. anova.csv: ANOVA results.
+        3. welchs_ttest.csv: Welch's t-test results.
         4. games_howell_equally_weighted.csv: Games-Howell test results for equally weighted models.
         5. games_howell_regression_optimized.csv: Games-Howell test results for regression-optimized models.
 
@@ -428,11 +430,11 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
         - viewsheds: Coefficient for mean-aggregated viewshed variables (manoeuvrability agg. indicator only).
 
     \b
-    ANOVA output file attributes:
+    Welch's t-test output file attributes:
         - group: Group name.
         - agg_indicator: Aggregated manoeuvrability indicator.
-        - fstat: F-test value.
-        - pvalue: P-value for significance testing.
+        - tstat: t-test value.
+        - pvalue: p-value for significance testing, corrected for False Discovery Rate via Benjamini-Hochberg procedure.
 
     \b
     Games-Howell test output file attributes:
@@ -471,9 +473,9 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
 
     try:
 
-        regression_anova = RegressionAnova(src, pvalue_slope, pvalue_ground_conditions, pvalue_avenues_of_approach,
-                                           pvalue_rifle_viewsheds, pvalue_machine_gun_viewsheds)
-        regression_anova()
+        regression = Regression(src, pvalue_slope, pvalue_ground_conditions, pvalue_avenues_of_approach,
+                                pvalue_rifle_viewsheds, pvalue_machine_gun_viewsheds)
+        regression()
 
     except KeyboardInterrupt:
         logger.exception("KeyboardInterrupt: Exiting program.")
