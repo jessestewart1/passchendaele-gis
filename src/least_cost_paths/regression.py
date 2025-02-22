@@ -178,7 +178,7 @@ class Regression:
                 "group_b": [vals[0][1] for vals in groups_indicator_combos],
                 "agg_indicator": [vals[1] for vals in groups_indicator_combos],
                 **{col: [0.0] * len(groups_indicator_combos) for col in
-                   ("mean_diff", "mean_se", "tstat", "pvalue", "ci_upper", "ci_lower")}
+                   ("mean_diff", "mean_se", "tstat", "pvalue", "ci_upper", "ci_lower", "cohens_d")}
             })
 
             # Iterate aggregated indicators and group combinations.
@@ -191,7 +191,7 @@ class Regression:
                     "group": chain.from_iterable([group] * len(residuals[group]) for group in residuals)})
 
                 # Perform Games-Howell test.
-                gh_results = pairwise_gameshowell(data=df_resid, dv="residuals", between="group")
+                gh_results = pairwise_gameshowell(data=df_resid, dv="residuals", between="group", effsize="cohen")
 
                 # Store results.
                 for group_pair in [vals[0] for vals in groups_indicator_combos if vals[1] == agg_indicator]:
@@ -207,6 +207,7 @@ class Regression:
                     results.loc[flag_dst, "mean_se"] = round(gh_results.loc[flag_test, "se"].iloc[0], 4)
                     results.loc[flag_dst, "tstat"] = round(gh_results.loc[flag_test, "T"].iloc[0], 4)
                     results.loc[flag_dst, "pvalue"] = round(gh_results.loc[flag_test, "pval"].iloc[0], 4)
+                    results.loc[flag_dst, "cohens_d"] = round(gh_results.loc[flag_test, "cohen"].iloc[0], 4)
 
                     # Calculate confidence intervals manually - store results.
                     df_, diff_, se_ = gh_results.loc[flag_test, ["df", "diff", "se"]].iloc[0].values
@@ -447,6 +448,7 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
         - pvalue: Adjusted p-value for significance testing.
         - ci_upper: Upper value of 95% confidence interval.
         - ci_lower: Lower value of 95% confidence interval.
+        - cohens_d: Effect size via Cohen's d.
 
     \b
     Assumptions:
