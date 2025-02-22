@@ -445,6 +445,8 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
         - mean_se: Standard error of the mean difference.
         - tstat: t-test value.
         - pvalue: Adjusted p-value for significance testing.
+        - ci_upper: Upper value of 95% confidence interval.
+        - ci_lower: Lower value of 95% confidence interval.
 
     \b
     Assumptions:
