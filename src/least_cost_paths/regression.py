@@ -210,10 +210,11 @@ class Regression:
                     results.loc[flag_dst, "cohens_d"] = round(gh_results.loc[flag_test, "cohen"].iloc[0], 4)
 
                     # Calculate confidence intervals manually - store results.
-                    df_, diff_, se_ = gh_results.loc[flag_test, ["df", "diff", "se"]].iloc[0].values
-                    t_critical = stats.t.ppf(q=0.975, df=df_)
-                    results.loc[flag_dst, "ci_lower"] = diff_ - (t_critical * se_)
-                    results.loc[flag_dst, "ci_upper"] = diff_ + (t_critical * se_)
+                    df_, diff_, se_, cohen_ = gh_results.loc[flag_test, ["df", "diff", "se", "cohen"]].iloc[0].values
+                    t_critical = stats.t.ppf(q=1 - (self.alpha / 2), df=df_)
+                    cohens_se = se_ / np.sqrt((len(residuals[group_pair[0]]) + len(residuals[group_pair[1]])) / 2)
+                    results.loc[flag_dst, "ci_lower"] = cohen_ - (t_critical * cohens_se)
+                    results.loc[flag_dst, "ci_upper"] = cohen_ + (t_critical * cohens_se)
 
             # Store final results.
             if model_type == "equally weighted":
