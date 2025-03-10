@@ -77,7 +77,7 @@ class LeastCostPaths:
     def __call__(self) -> None:
         """Executes the LeastCostPaths class."""
 
-        self.permute_pt_pairs()
+        self.configure_pt_pairs()
         self.create_graph()
         self.calculate_least_cost_paths()
         self.export()
@@ -104,6 +104,40 @@ class LeastCostPaths:
             # Calculate least-cost paths using Dijkstra's algorithm.
             self.results.at[idx, "indexes"] = self.graph.get_shortest_path(
                 v=index_source, to=index_target, weights="weight", mode="out", output="vpath", algorithm="dijkstra")
+
+    def configure_pt_pairs(self) -> None:
+        """Configures each source - target point-pair combination within each named group."""
+
+        logger.info("Configuring source - target point pairs.")
+        pt_pairs = list()
+
+        # Iterate named groups.
+        for group in set(self.src_pts_source[self.field_pt_group]):
+
+            # Compile source and target indexes.
+            pts_source = set(self.src_pts_source.loc[self.src_pts_source[self.field_pt_group] == group,
+                                                     self.field_pt_index])
+            pts_target = set(self.src_pts_target.loc[self.src_pts_target[self.field_pt_group] == group,
+                                                     self.field_pt_index])
+
+            # Compile combinations as DataFrame.
+            pts_source_, pts_target_ = zip(*product(pts_source, pts_target))
+            pt_pairs.append(pd.DataFrame({"group": group, "source": pts_source_, "target": pts_target_}))
+
+            logger.info(f"Compiled {len(pt_pairs[-1])} source - target pairs for group: {group}.")
+
+        # Concatenate all combinations into single DataFrame.
+        self.pt_pairs = pd.concat(pt_pairs, axis=0, ignore_index=True)
+
+        # Subset point pairs, if required.
+        if (self.pts_index_start >= 0) and (self.pts_index_end > self.pts_index_start):
+
+            self.pt_pairs = self.pt_pairs.loc[(self.pt_pairs.index >= self.pts_index_start) &
+                                              (self.pt_pairs.index <= self.pts_index_end)].copy(deep=True)
+            self.pt_pairs.reset_index(drop=True, inplace=True)
+
+            logger.info(f"Source - target point pairs subset to indexes: {self.pts_index_start} - {self.pts_index_end} "
+                        f"(inclusively).")
 
     def create_graph(self) -> None:
         """Creates a directed Graph from a collection of node indexes and cost values."""
@@ -161,40 +195,6 @@ class LeastCostPaths:
             .to_file(self.dst, layer=self.dst_layer)
         logger.info(f"Successfully exported results to: {self.dst}, layer={self.dst_layer}.")
 
-    def permute_pt_pairs(self) -> None:
-        """Permutes each source - target point pair within each named group."""
-
-        logger.info("Permuting source - target point pairs.")
-        pt_pairs = list()
-
-        # Iterate named groups.
-        for group in set(self.src_pts_source[self.field_pt_group]):
-
-            # Compile source and target indexes.
-            pts_source = set(self.src_pts_source.loc[self.src_pts_source[self.field_pt_group] == group,
-                                                     self.field_pt_index])
-            pts_target = set(self.src_pts_target.loc[self.src_pts_target[self.field_pt_group] == group,
-                                                     self.field_pt_index])
-
-            # Compile permutations as DataFrame.
-            pts_source_, pts_target_ = zip(*product(pts_source, pts_target))
-            pt_pairs.append(pd.DataFrame({"group": group, "source": pts_source_, "target": pts_target_}))
-
-            logger.info(f"Compiled {len(pt_pairs[-1])} source - target pairs for group: {group}.")
-
-        # Concatenate all permutations into single DataFrame.
-        self.pt_pairs = pd.concat(pt_pairs, axis=0, ignore_index=True)
-
-        # Subset point pairs, if required.
-        if (self.pts_index_start >= 0) and (self.pts_index_end > self.pts_index_start):
-
-            self.pt_pairs = self.pt_pairs.loc[(self.pt_pairs.index >= self.pts_index_start) &
-                                              (self.pt_pairs.index <= self.pts_index_end)].copy(deep=True)
-            self.pt_pairs.reset_index(drop=True, inplace=True)
-
-            logger.info(f"Source - target point pairs subset to indexes: {self.pts_index_start} - {self.pts_index_end} "
-                        f"(inclusively).")
-
 
 @click.command()
 @click.argument("src_nodes",
@@ -223,7 +223,7 @@ def main(src_nodes: Path, field_index_source: str, field_index_target: str, fiel
     """
     \b
     Description: Creates an igraph directed Graph from a set of node index pairs as edges, with associated cost values.
-    For each permutation of source and target points within each named group of source and target points, calculates
+    For each combination of source and target points within each named group of source and target points, calculates
     the least-cost path along the Graph, using the cost values as the weight.
 
     \b
@@ -241,7 +241,7 @@ def main(src_nodes: Path, field_index_source: str, field_index_target: str, fiel
         - All spatial data is in the same, meter-based projection.
         - All source and target points match node coordinates added to the Graph.
         - All source and target points have named groups that exist in the other.
-        - All permutations of source - target pairs can be reached using the Graph.
+        - All combinations of source - target point pairs can be reached using the Graph.
         - The collection of node pairs added to the Graph as edges does not contain any negative cost values.
         - All input CSVs have headers as the first row and comma (,) as the delimiter.
 
