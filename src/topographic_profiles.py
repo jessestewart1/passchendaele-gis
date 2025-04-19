@@ -21,13 +21,14 @@ logger.addHandler(handler)
 class TopographicProfile:
     """Defines the TopographicProfile class."""
 
-    def __init__(self, src_lines: Path, src_layer: str, src_name: str, src_rasters: Path) -> None:
+    def __init__(self, src_lines: Path, src_layer: str, src_name: str, src_rasters: Path, interval: int) -> None:
         """Initializes the TopographicProfile class."""
 
         self.src_lines = src_lines
         self.src_lines_layer = src_layer
         self.src_lines_name = src_name
         self.src_rasters = src_rasters
+        self.interval = interval
         self.dst = self.src_lines.parent / "topographic_profile"
         self.crs = "EPSG:3043"
         self.nodata = -99999
@@ -67,7 +68,8 @@ class TopographicProfile:
             # Format output.
             elevation, g, points = self.lines.loc[self.lines[self.src_lines_name] == name,
                                                   ["elevation", "geometry", "points"]].iloc[0]
-            output = pd.DataFrame({"distance": (*tuple(map(lambda idx: idx * 10, range(len(elevation)-1))), g.length),
+            output = pd.DataFrame({"distance": (*tuple(map(lambda idx: idx * self.interval,
+                                                           range(len(elevation)-1))), g.length),
                                    "elevation": elevation})
 
             # Round data.
@@ -94,15 +96,16 @@ class TopographicProfile:
 
     def interpolate_points(self) -> None:
         """
-        For each LineString, generates a sequence of points at every 10-meter interval, including the first and last
-        point in the LineString.
+        For each LineString, generates a sequence of points at a fixed interval, keeping the first and last points of
+        the LineString.
         """
 
         logger.info("Interpolating points along LineStrings.")
 
         # Interpolate points.
         self.lines["points"] = self.lines["geometry"].map(
-            lambda g: (*tuple(map(lambda dist: g.interpolate(dist * 10).coords[0], range(int(g.length / 10) + 1))),
+            lambda g: (*tuple(map(lambda dist: g.interpolate(dist * self.interval).coords[0],
+                                  range(int(g.length / self.interval) + 1))),
                        g.coords[-1]))
 
     def sample_rasters(self) -> None:
@@ -165,12 +168,13 @@ class TopographicProfile:
 @click.argument("src_name", type=click.STRING)
 @click.argument("src_rasters",
                 type=click.Path(exists=True, file_okay=False, dir_okay=True, resolve_path=True, path_type=Path))
-def main(src_lines: Path, src_layer: str, src_name: str, src_rasters: Path) -> None:
+@click.argument("interval", type=click.INT)
+def main(src_lines: Path, src_layer: str, src_name: str, src_rasters: Path, interval: int) -> None:
     """
     \b
     Description: For one or more LineStrings representing the path of the desired topographic profile(s), a sequence of
-    points is interpolated at every 10-meter interval, including the first and last points in the LineString. Then, for
-    each point, the elevation value is retrieved from the cell of the DTM raster which the point intersects.
+    points is interpolated at a given interval (meters), including the first and last points in the LineString. Then,
+    for each point, the elevation value is retrieved from the cell of the DTM raster which the point intersects.
 
     \b
     Output: For each input LineString, both a .csv and GeoPackage layer are output within a new subdirectory,
@@ -194,11 +198,12 @@ def main(src_lines: Path, src_layer: str, src_name: str, src_rasters: Path) -> N
     :param str src_layer: Layer containing one or more LineStrings within the source GeoPackage.
     :param str src_name: Layer column used to uniquely identify each row and form the name of the output .csv.
     :param Path src_rasters: Directory containing one or more GeoTIFF DTM rasters.
+    :param int interval: Point interpolation distance (meters).
     """
 
     try:
 
-        topographic_profile = TopographicProfile(src_lines, src_layer, src_name, src_rasters)
+        topographic_profile = TopographicProfile(src_lines, src_layer, src_name, src_rasters, interval)
         topographic_profile()
 
     except KeyboardInterrupt:
