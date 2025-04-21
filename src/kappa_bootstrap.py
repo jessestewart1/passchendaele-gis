@@ -1,8 +1,11 @@
 import click
 import logging
 import numpy as np
-import pandas as pd
 import sys
+from copy import deepcopy
+from itertools import chain
+from tabulate import tabulate
+from tqdm import tqdm
 
 # Set logger.
 logger = logging.getLogger(__name__)
@@ -23,22 +26,20 @@ class KappaBootstrap:
         self.indicator_historical = indicator_historical
         self.indicator_analysis = indicator_analysis
 
-        # Define kappa variables.
-        self.p_obs = {
-            "red": 0.0,
-            "blue": 0.0,
-            "green": 0.0,
-            "all": 0.0
-        }
-        self.p_exp = 0.0
+        # Define kappa and p-value variables.
+        self.n_permutations = 9999
         self.kappa = {
             "red": 0.0,
             "blue": 0.0,
             "green": 0.0,
             "all": 0.0
         }
-        self.n_permutations = 10000
-        self.p_value = 0.0
+        self.pvalues = {
+            "red": 0.0,
+            "blue": 0.0,
+            "green": 0.0,
+            "all": 0.0
+        }
 
         # Define rating scales.
         self.scale = {
@@ -134,89 +135,133 @@ class KappaBootstrap:
     def __call__(self) -> None:
         """Executes the KappaBootstrap class."""
 
-        self.calculate_kappa()
-        print(self.kappa)
+        self.kappa = self.calculate_kappa(r_historical=self.r_historical, r_analysis=self.r_analysis)
         self.calculate_pvalue()
 
-    def calculate_kappa(self) -> None:
-        """Calculates Cohen's kappa coefficient using spatial adjacency weighting with partial matching."""
+        # Log results.
+        table = tabulate([[k, kappa, self.pvalues[k]] for k, kappa in self.kappa.items()],
+                         headers=["Objective Line", "kappa", "p-value"], tablefmt="rst",
+                         colalign=("left", "right", "right"))
+        logger.info("\n" + table)
+
+    def calculate_kappa(self, r_historical: dict[str, list[int]], r_analysis: dict[str, list[int]]) -> dict[str, float]:
+        """
+        Calculates Cohen's kappa coefficient using spatial adjacency weighting with partial matching.
+
+        :param dict[str, list[int]] r_historical: Ratings for historical accounts.
+        :param dict[str, list[int]] r_analysis: Ratings for manoeuvrability analysis.
+        :return dict[str, float]: Cohen's kappa coefficients.
+        """
 
         logger.info("Calculating Cohen's kappa coefficient (observed).")
 
         # Calculate score.
-        score = {k: list() for k in ("red", "blue", "green")}
+        score = {k: list() for k in set(self.kappa) - {"all"}}
         for obj in score:
             for idx in range(6):
 
                 # Partial matching based on value.
-                value_score = 1 - abs((self.r_historical[obj][idx] - self.r_analysis[obj][idx]) / (len(self.scale) - 1))
+                value_score = 1 - abs((r_historical[obj][idx] - r_analysis[obj][idx]) / (len(self.scale) - 1))
 
                 # Partial matching based on spatial adjacency.
-                if self.r_historical[obj][idx] == self.r_analysis[obj][idx]:
+                if r_historical[obj][idx] == r_analysis[obj][idx]:
                     spatial_score = 1
 
                 else:
 
                     # First exterior corridor.
                     if idx == 0:
-                        spatial_score = 0.5 if (self.r_historical[obj][idx] == self.r_analysis[obj][idx + 1]) else 0
+                        spatial_score = 0.5 if (r_historical[obj][idx] == r_analysis[obj][idx + 1]) else 0
 
                     # Last exterior corridor.
                     elif idx == 5:
-                        spatial_score = 0.5 if (self.r_historical[obj][idx] == self.r_analysis[obj][idx - 1]) else 0
+                        spatial_score = 0.5 if (r_historical[obj][idx] == r_analysis[obj][idx - 1]) else 0
 
                     # Interior corridors.
                     else:
-                        spatial_score = 0.5 if ((self.r_historical[obj][idx] == self.r_analysis[obj][idx - 1]) or
-                                                (self.r_historical[obj][idx] == self.r_analysis[obj][idx + 1])) else 0
+                        spatial_score = 0.5 if ((r_historical[obj][idx] == r_analysis[obj][idx - 1]) or
+                                                (r_historical[obj][idx] == r_analysis[obj][idx + 1])) else 0
 
                 score[obj].append(max([value_score, spatial_score]))
 
         # Calculate observed alignment.
-        for obj in self.p_obs:
+        p_obs = {k: 0.0 for k in self.kappa}
+        for obj in p_obs:
             if obj == "all":
-                self.p_obs[obj] = sum([sum(scores) for scores in score.values()]) / 18
+                p_obs[obj] = sum([sum(scores) for scores in score.values()]) / 18
             else:
-                self.p_obs[obj] = sum(score[obj]) / 6
+                p_obs[obj] = sum(score[obj]) / 6
 
         # Calculate value proportions.
         prop_historical = {k: 0.0 for k in self.scale}
         for val in prop_historical:
-            prop_historical[val] = sum([self.r_historical[obj].count(val) for obj in self.r_historical]) / 18
+            prop_historical[val] = sum([r_historical[obj].count(val) for obj in r_historical]) / 18
 
         prop_analysis = {k: 0.0 for k in self.scale}
         for val in prop_analysis:
-            prop_analysis[val] = sum([self.r_analysis[obj].count(val) for obj in self.r_analysis]) / 18
+            prop_analysis[val] = sum([r_analysis[obj].count(val) for obj in r_analysis]) / 18
 
         # Calculate expected alignment.
+        p_exp = 0.0
         if self.classification == "ordinal":
 
             for idx, val in enumerate(self.scale):
 
                 if idx == 0:
-                    self.p_exp += ((prop_historical[val] * prop_analysis[val] * 1) +
-                                   (prop_historical[val] * prop_analysis[self.scale[idx + 1]] * 0.5))
+                    p_exp += ((prop_historical[val] * prop_analysis[val] * 1) +
+                              (prop_historical[val] * prop_analysis[self.scale[idx + 1]] * 0.5))
 
                 elif val == self.scale[-1]:
-                    self.p_exp += ((prop_historical[val] * prop_analysis[val] * 1) +
-                                   (prop_historical[val] * prop_analysis[self.scale[idx - 1]] * 0.5))
+                    p_exp += ((prop_historical[val] * prop_analysis[val] * 1) +
+                              (prop_historical[val] * prop_analysis[self.scale[idx - 1]] * 0.5))
 
                 else:
-                    self.p_exp += ((prop_historical[val] * prop_analysis[val] * 1) +
-                                   (prop_historical[val] * prop_analysis[self.scale[idx - 1]] * 0.5) +
-                                   (prop_historical[val] * prop_analysis[self.scale[idx + 1]] * 0.5))
+                    p_exp += ((prop_historical[val] * prop_analysis[val] * 1) +
+                              (prop_historical[val] * prop_analysis[self.scale[idx - 1]] * 0.5) +
+                              (prop_historical[val] * prop_analysis[self.scale[idx + 1]] * 0.5))
 
         else:
-            self.p_exp = sum([prop_historical[val] * prop_analysis[val] for val in self.scale])
+            p_exp = sum([prop_historical[val] * prop_analysis[val] for val in self.scale])
 
         # Calculate kappa.
+        kappa = dict()
         for obj in self.kappa:
-            self.kappa[obj] = (self.p_obs[obj] - self.p_exp) / (1 - self.p_exp)
+            kappa[obj] = (p_obs[obj] - p_exp) / (1 - p_exp)
+
+        return deepcopy(kappa)
 
     def calculate_pvalue(self) -> None:
         """Calculates empirical p-value for Cohen's kappa coefficient using bootstrap resampling methodology."""
 
-        # TODO
+        logger.info("Calculating p-values via bootstrap method.")
+
+        # Compile rating pairs.
+        pairs = list(zip(list(chain.from_iterable(self.r_historical.values())),
+                         list(chain.from_iterable(self.r_analysis.values()))))
+
+        # Iteratively re-calculate kappa.
+        n_pairs = len(pairs)
+        kappa_bootstrap = {k: list() for k in self.kappa}
+        for _ in tqdm(range(self.n_permutations), desc="Calculating kappa for resampled ratings"):
+
+            # Resample rating pairs.
+            resampled_idxs = np.random.choice(n_pairs, size=n_pairs, replace=True)
+            resampled_pairs = [pairs[resampled_idx] for resampled_idx in resampled_idxs]
+
+            # Reconstruct rating structure.
+            r_historical = {obj: [pair[0] for pair in resampled_pairs[(idx * 6): ((idx + 1) * 6)]]
+                            for idx, obj in enumerate(self.r_historical)}
+            r_analysis = {obj: [pair[1] for pair in resampled_pairs[(idx * 6): ((idx + 1) * 6)]]
+                          for idx, obj in enumerate(self.r_analysis)}
+
+            # Calculate kappa.
+            kappa_results = self.calculate_kappa(r_historical=r_historical, r_analysis=r_analysis)
+            for obj, kappa in kappa_results.items():
+                kappa_bootstrap[obj].append(kappa)
+
+        # Calculate p-value.
+        for obj, kappa_obs in self.kappa.items():
+            self.pvalues[obj] = np.sum(np.abs(kappa_bootstrap[obj]) >= np.abs(kappa_obs)) / self.n_permutations
 
 
 @click.command()
@@ -228,11 +273,17 @@ class KappaBootstrap:
 def main(classification: str, indicator_historical: str, indicator_analysis: str) -> None:
     """
     \b
-    Description: TODO.
+    Description: Calculates the two-tailed p-value for each objective line (red, blue, green; and cumulative 'all') for
+    the Cohen's kappa coefficient calculated for the alignment between ratings from historical accounts and
+    manoeuvrability analysis.
+
+    \b
+    Output: P-values printed to console.
 
     \b
     Assumptions:
-        - TODO
+        - Each classification scheme and aggregated indicator has the same number of ratings per objective line.
+        - There are 3 objective lines, each having 6 ratings per rater.
 
     \b
     :param str classification: Classification scheme of rating values.
