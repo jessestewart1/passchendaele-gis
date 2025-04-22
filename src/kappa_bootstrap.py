@@ -144,16 +144,19 @@ class KappaBootstrap:
                          colalign=("left", "right", "right"))
         logger.info("\n" + table)
 
-    def calculate_kappa(self, r_historical: dict[str, list[int]], r_analysis: dict[str, list[int]]) -> dict[str, float]:
+    def calculate_kappa(self, r_historical: dict[str, list[int]], r_analysis: dict[str, list[int]],
+                        suppress_log: bool=False) -> dict[str, float]:
         """
         Calculates Cohen's kappa coefficient using spatial adjacency weighting with partial matching.
 
         :param dict[str, list[int]] r_historical: Ratings for historical accounts.
         :param dict[str, list[int]] r_analysis: Ratings for manoeuvrability analysis.
+        :param bool suppress_log: Indicates if logging should be suppressed (useful when repeatedly called).
         :return dict[str, float]: Cohen's kappa coefficients.
         """
 
-        logger.info("Calculating Cohen's kappa coefficient (observed).")
+        if not suppress_log:
+            logger.info("Calculating Cohen's kappa coefficient (observed).")
 
         # Calculate score.
         score = {k: list() for k in set(self.kappa) - {"all"}}
@@ -235,33 +238,35 @@ class KappaBootstrap:
 
         logger.info("Calculating p-values via bootstrap method.")
 
-        # Compile rating pairs.
-        pairs = list(zip(list(chain.from_iterable(self.r_historical.values())),
-                         list(chain.from_iterable(self.r_analysis.values()))))
-
         # Iteratively re-calculate kappa.
-        n_pairs = len(pairs)
         kappa_bootstrap = {k: list() for k in self.kappa}
         for _ in tqdm(range(self.n_permutations), desc="Calculating kappa for resampled ratings"):
 
+            # Compile rating pairs.
+            pairs = list(zip(list(chain.from_iterable(self.r_historical.values())),
+                             list(chain.from_iterable(self.r_analysis.values()))))
+
             # Resample rating pairs.
-            resampled_idxs = np.random.choice(n_pairs, size=n_pairs, replace=True)
+            resampled_idxs = np.random.choice(len(pairs), size=len(pairs), replace=True)
             resampled_pairs = [pairs[resampled_idx] for resampled_idx in resampled_idxs]
 
-            # Reconstruct rating structure.
-            r_historical = {obj: [pair[0] for pair in resampled_pairs[(idx * 6): ((idx + 1) * 6)]]
-                            for idx, obj in enumerate(self.r_historical)}
-            r_analysis = {obj: [pair[1] for pair in resampled_pairs[(idx * 6): ((idx + 1) * 6)]]
-                          for idx, obj in enumerate(self.r_analysis)}
+            # Iterate objective lines.
+            r_historical = {k: list() for k in self.r_historical}
+            r_analysis = {k: list() for k in self.r_analysis}
+            for idx, obj in enumerate(self.r_historical):
+
+                # Store resampled rating pairs.
+                r_historical[obj] = [pair[0] for pair in resampled_pairs[(idx * 6) : ((idx + 1) * 6)]]
+                r_analysis[obj] = [pair[1] for pair in resampled_pairs[(idx * 6) : ((idx + 1) * 6)]]
 
             # Calculate kappa.
-            kappa_results = self.calculate_kappa(r_historical=r_historical, r_analysis=r_analysis)
+            kappa_results = self.calculate_kappa(r_historical=r_historical, r_analysis=r_analysis, suppress_log=True)
             for obj, kappa in kappa_results.items():
                 kappa_bootstrap[obj].append(kappa)
 
-        # Calculate p-value.
+        # Calculate p-value (one-tailed).
         for obj, kappa_obs in self.kappa.items():
-            self.pvalues[obj] = np.sum(np.abs(kappa_bootstrap[obj]) >= np.abs(kappa_obs)) / self.n_permutations
+            self.pvalues[obj] = (np.sum(np.array(kappa_bootstrap[obj]) >= kappa_obs) + 1) / (self.n_permutations + 1)
 
 
 @click.command()
@@ -273,7 +278,7 @@ class KappaBootstrap:
 def main(classification: str, indicator_historical: str, indicator_analysis: str) -> None:
     """
     \b
-    Description: Calculates the two-tailed p-value for each objective line (red, blue, green; and cumulative 'all') for
+    Description: Calculates the one-tailed p-value for each objective line (red, blue, green; and cumulative 'all') for
     the Cohen's kappa coefficient calculated for the alignment between ratings from historical accounts and
     manoeuvrability analysis.
 
