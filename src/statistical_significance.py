@@ -137,7 +137,7 @@ class StatisticalSignificance:
             for _ in tqdm(range(self.permutations), desc=f"Generating MSR matrices and calculating Pearson's "
                                                          f"correlation coefficients (r)"):
 
-                # Generate  MSR matrix.
+                # Generate MSR matrix.
                 matrix_msr = self._gen_msr_matrix(matrix_lcp)
 
                 # Flatten MSR matrix.

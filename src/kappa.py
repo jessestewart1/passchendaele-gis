@@ -16,23 +16,30 @@ handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s: %(message)s
 logger.addHandler(handler)
 
 
-class KappaBootstrap:
-    """Defines the KappaBootstrap class."""
+class Kappa:
+    """Defines the Kappa class."""
 
     def __init__(self, classification: str, indicator_historical: str, indicator_analysis: str) -> None:
-        """Initializes the KappaBootstrap class."""
+        """Initializes the Kappa class."""
 
         self.classification = classification
         self.indicator_historical = indicator_historical
         self.indicator_analysis = indicator_analysis
 
-        # Define kappa and p-value variables.
+        # Define kappa, CI, and p-value variables.
         self.n_permutations = 9999
+        self.p_exp = 0.0
         self.kappa = {
             "red": 0.0,
             "blue": 0.0,
             "green": 0.0,
             "all": 0.0
+        }
+        self.ci = {
+            "red": {"lower": 0.0, "upper": 0.0},
+            "blue": {"lower": 0.0, "upper": 0.0},
+            "green": {"lower": 0.0, "upper": 0.0},
+            "all": {"lower": 0.0, "upper": 0.0}
         }
         self.pvalues = {
             "red": 0.0,
@@ -133,24 +140,67 @@ class KappaBootstrap:
         }[self.classification][self.indicator_analysis]
 
     def __call__(self) -> None:
-        """Executes the KappaBootstrap class."""
+        """Executes the Kappa class."""
 
-        self.kappa = self.calculate_kappa(r_historical=self.r_historical, r_analysis=self.r_analysis)
+        self.kappa = self.calculate_kappa(r_historical=self.r_historical, r_analysis=self.r_analysis, reuse_pexp=False)
+        self.calculate_ci()
         self.calculate_pvalue()
 
         # Log results.
-        table = tabulate([[k, kappa, self.pvalues[k]] for k, kappa in self.kappa.items()],
-                         headers=["Objective Line", "kappa", "p-value"], tablefmt="rst",
-                         colalign=("left", "right", "right"))
+        table = tabulate([[obj, kappa, self.pvalues[obj], self.ci[obj]["lower"], self.ci[obj]["upper"]] for obj, kappa
+                          in self.kappa.items()],
+                         headers=["Objective Line", "kappa", "pvalue", "ci_lower", "ci_upper"], tablefmt="rst",
+                         colalign=("left", "right", "right", "right", "right"))
         logger.info("\n" + table)
 
+    def calculate_ci(self) -> None:
+        """Calculates 95% confidence intervals for Cohen's kappa coefficients using bootstrap resampling methodology."""
+
+        logger.info("Calculating 95% confidence intervals via bootstrap method.")
+
+        # Iteratively re-calculate kappa.
+        kappa_bootstrap = {k: list() for k in self.kappa}
+        for _ in tqdm(range(self.n_permutations), desc="Calculating kappa for resampled ratings"):
+
+            # Compile rating pairs.
+            pairs = list(zip(list(chain.from_iterable(self.r_historical.values())),
+                             list(chain.from_iterable(self.r_analysis.values()))))
+
+            # Resample rating pairs.
+            resampled_idxs = np.random.choice(len(pairs), size=len(pairs), replace=True)
+            resampled_pairs = [pairs[resampled_idx] for resampled_idx in resampled_idxs]
+
+            # Iteratively recompile results by objective lines.
+            r_historical = {k: list() for k in self.r_historical}
+            r_analysis = {k: list() for k in self.r_analysis}
+            for idx, obj in enumerate(self.r_historical):
+
+                # Store resampled rating pairs.
+                r_historical[obj] = [pair[0] for pair in resampled_pairs[(idx * 6) : ((idx + 1) * 6)]]
+                r_analysis[obj] = [pair[1] for pair in resampled_pairs[(idx * 6) : ((idx + 1) * 6)]]
+
+            # Calculate kappa.
+            kappa_results = self.calculate_kappa(r_historical=r_historical, r_analysis=r_analysis, reuse_pexp=True,
+                                                 suppress_log=True)
+            for obj, kappa in kappa_results.items():
+                kappa_bootstrap[obj].append(kappa)
+
+        # Calculate 95% confidence interval.
+        for obj, kappa_obs in self.kappa.items():
+
+            kappa_bootstrap_ = np.sort(np.array(kappa_bootstrap[obj]))
+            ci_lower = np.percentile(kappa_bootstrap_, 2.5)
+            ci_upper = np.percentile(kappa_bootstrap_, 97.5)
+            self.ci[obj] = {"lower": ci_lower, "upper": ci_upper}
+
     def calculate_kappa(self, r_historical: dict[str, list[int]], r_analysis: dict[str, list[int]],
-                        suppress_log: bool=False) -> dict[str, float]:
+                        reuse_pexp: bool=False, suppress_log: bool=False) -> dict[str, float]:
         """
         Calculates Cohen's kappa coefficient using spatial adjacency weighting with partial matching.
 
         :param dict[str, list[int]] r_historical: Ratings for historical accounts.
         :param dict[str, list[int]] r_analysis: Ratings for manoeuvrability analysis.
+        :param bool reuse_pexp: Indicates if expected alignment (p_exp) should be reused, rather than re-calculated.
         :param bool suppress_log: Indicates if logging should be suppressed (useful when repeatedly called).
         :return dict[str, float]: Cohen's kappa coefficients.
         """
@@ -205,68 +255,61 @@ class KappaBootstrap:
             prop_analysis[val] = sum([r_analysis[obj].count(val) for obj in r_analysis]) / 18
 
         # Calculate expected alignment.
-        p_exp = 0.0
-        if self.classification == "ordinal":
+        if not reuse_pexp:
+            if self.classification == "ordinal":
 
-            for idx, val in enumerate(self.scale):
+                for idx, val in enumerate(self.scale):
 
-                if idx == 0:
-                    p_exp += ((prop_historical[val] * prop_analysis[val] * 1) +
-                              (prop_historical[val] * prop_analysis[self.scale[idx + 1]] * 0.5))
+                    if idx == 0:
+                        self.p_exp += ((prop_historical[val] * prop_analysis[val] * 1) +
+                                       (prop_historical[val] * prop_analysis[self.scale[idx + 1]] * 0.5))
 
-                elif val == self.scale[-1]:
-                    p_exp += ((prop_historical[val] * prop_analysis[val] * 1) +
-                              (prop_historical[val] * prop_analysis[self.scale[idx - 1]] * 0.5))
+                    elif val == self.scale[-1]:
+                        self.p_exp += ((prop_historical[val] * prop_analysis[val] * 1) +
+                                       (prop_historical[val] * prop_analysis[self.scale[idx - 1]] * 0.5))
 
-                else:
-                    p_exp += ((prop_historical[val] * prop_analysis[val] * 1) +
-                              (prop_historical[val] * prop_analysis[self.scale[idx - 1]] * 0.5) +
-                              (prop_historical[val] * prop_analysis[self.scale[idx + 1]] * 0.5))
+                    else:
+                        self.p_exp += ((prop_historical[val] * prop_analysis[val] * 1) +
+                                       (prop_historical[val] * prop_analysis[self.scale[idx - 1]] * 0.5) +
+                                       (prop_historical[val] * prop_analysis[self.scale[idx + 1]] * 0.5))
 
-        else:
-            p_exp = sum([prop_historical[val] * prop_analysis[val] for val in self.scale])
+            else:
+                self.p_exp = sum([prop_historical[val] * prop_analysis[val] for val in self.scale])
 
         # Calculate kappa.
         kappa = dict()
         for obj in self.kappa:
-            kappa[obj] = (p_obs[obj] - p_exp) / (1 - p_exp)
+            kappa[obj] = (p_obs[obj] - self.p_exp) / (1 - self.p_exp)
 
         return deepcopy(kappa)
 
     def calculate_pvalue(self) -> None:
-        """Calculates empirical p-value for Cohen's kappa coefficient using bootstrap resampling methodology."""
+        """Calculates one-tailed p-values for permuted Cohen's kappa coefficients."""
 
-        logger.info("Calculating p-values via bootstrap method.")
+        logger.info("Calculating p-values using permutations.")
 
-        # Iteratively re-calculate kappa.
-        kappa_bootstrap = {k: list() for k in self.kappa}
-        for _ in tqdm(range(self.n_permutations), desc="Calculating kappa for resampled ratings"):
+        # Iterate permutations.
+        kappa_permutations = {k: list() for k in self.kappa}
+        for _ in tqdm(range(self.n_permutations), desc="Calculating kappa for permuted ratings"):
 
-            # Compile rating pairs.
-            pairs = list(zip(list(chain.from_iterable(self.r_historical.values())),
-                             list(chain.from_iterable(self.r_analysis.values()))))
+            # Permute historical ratings set.
+            ratings = list(chain.from_iterable(self.r_historical.values()))
+            r_permuted = list(np.random.permutation(ratings))
 
-            # Resample rating pairs.
-            resampled_idxs = np.random.choice(len(pairs), size=len(pairs), replace=True)
-            resampled_pairs = [pairs[resampled_idx] for resampled_idx in resampled_idxs]
-
-            # Iterate objective lines.
+            # Iteratively recompile results by objective line.
             r_historical = {k: list() for k in self.r_historical}
-            r_analysis = {k: list() for k in self.r_analysis}
-            for idx, obj in enumerate(self.r_historical):
-
-                # Store resampled rating pairs.
-                r_historical[obj] = [pair[0] for pair in resampled_pairs[(idx * 6) : ((idx + 1) * 6)]]
-                r_analysis[obj] = [pair[1] for pair in resampled_pairs[(idx * 6) : ((idx + 1) * 6)]]
+            for idx, obj in enumerate(r_historical):
+                r_historical[obj] = r_permuted[(idx * 6): ((idx + 1) * 6)]
 
             # Calculate kappa.
-            kappa_results = self.calculate_kappa(r_historical=r_historical, r_analysis=r_analysis, suppress_log=True)
+            kappa_results = self.calculate_kappa(r_historical=r_historical, r_analysis=self.r_analysis, reuse_pexp=True,
+                                                 suppress_log=True)
             for obj, kappa in kappa_results.items():
-                kappa_bootstrap[obj].append(kappa)
+                kappa_permutations[obj].append(kappa)
 
         # Calculate p-value (one-tailed).
         for obj, kappa_obs in self.kappa.items():
-            self.pvalues[obj] = (np.sum(np.array(kappa_bootstrap[obj]) >= kappa_obs) + 1) / (self.n_permutations + 1)
+            self.pvalues[obj] = (np.sum(np.array(kappa_permutations[obj]) >= kappa_obs) + 1) / (self.n_permutations + 1)
 
 
 @click.command()
@@ -278,12 +321,12 @@ class KappaBootstrap:
 def main(classification: str, indicator_historical: str, indicator_analysis: str) -> None:
     """
     \b
-    Description: Calculates the one-tailed p-value for each objective line (red, blue, green; and cumulative 'all') for
-    the Cohen's kappa coefficient calculated for the alignment between ratings from historical accounts and
-    manoeuvrability analysis.
+    Description: Calculates Cohen's kappa coefficient, p-value (one-tailed), and 95% confidence intervals for the set
+    of ratings from historical accounts and manoeuvrability analysis per objective line (red, blue, green, and
+    cumulative 'all').
 
     \b
-    Output: P-values printed to console.
+    Output: Metrics printed to console.
 
     \b
     Assumptions:
@@ -298,8 +341,8 @@ def main(classification: str, indicator_historical: str, indicator_analysis: str
 
     try:
 
-        kappa_bootstrap = KappaBootstrap(classification, indicator_historical, indicator_analysis)
-        kappa_bootstrap()
+        kappa = Kappa(classification, indicator_historical, indicator_analysis)
+        kappa()
 
     except KeyboardInterrupt:
         logger.exception("KeyboardInterrupt: Exiting program.")
