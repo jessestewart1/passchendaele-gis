@@ -1,4 +1,4 @@
-name: igeon
+name: dissertation
 channels:
   - conda-forge
 dependencies:
