@@ -82,17 +82,17 @@ class Regression:
         """Initializes the Regression class."""
 
         self.dst_df_equations_equal = pd.DataFrame()
-        self.dst_df_equations_optimized = pd.DataFrame()
+        self.dst_df_equations_independent = pd.DataFrame()
         self.dst_equations_equal = Path(src.parent / "equations_equally_weighted.csv")
-        self.dst_equations_optimized = Path(src.parent / "equations_regression_optimized.csv")
+        self.dst_equations_independent = Path(src.parent / "equations_independently_weighted.csv")
         self.dst_df_gh_equal = pd.DataFrame()
-        self.dst_df_gh_optimized = pd.DataFrame()
+        self.dst_df_gh_independent = pd.DataFrame()
         self.dst_df_welchs = pd.DataFrame()
         self.dst_gh_equal = Path(src.parent / "games_howell_equally_weighted.csv")
-        self.dst_gh_optimized = Path(src.parent / "games_howell_regression_optimized.csv")
+        self.dst_gh_independent = Path(src.parent / "games_howell_independently_weighted.csv")
         self.dst_welchs = Path(src.parent / "welchs_ttest.csv")
         self.models_equal = defaultdict(dict)
-        self.models_optimized = defaultdict(dict)
+        self.models_independent = defaultdict(dict)
         self.lcps = dict()
         self.pvalues = dict()
         self.alpha = 0.05
@@ -134,7 +134,7 @@ class Regression:
 
         # Create equations.
         self.dst_df_equations_equal = self.gen_equations(equal_coeff=True)
-        self.dst_df_equations_optimized = self.gen_equations(equal_coeff=False)
+        self.dst_df_equations_independent = self.gen_equations(equal_coeff=False)
 
         # Perform and compile results of Welch's t-test and Games-Howell test.
         self.welchs_ttest()
@@ -144,14 +144,14 @@ class Regression:
         self.dst_df_equations_equal.to_csv(self.dst_equations_equal, sep=",", header=True, index=False)
         logger.info(f"Exported results to: {self.dst_equations_equal}.")
 
-        self.dst_df_equations_optimized.to_csv(self.dst_equations_optimized, sep=",", header=True, index=False)
-        logger.info(f"Exported results to: {self.dst_equations_optimized}.")
+        self.dst_df_equations_independent.to_csv(self.dst_equations_independent, sep=",", header=True, index=False)
+        logger.info(f"Exported results to: {self.dst_equations_independent}.")
 
         self.dst_df_gh_equal.to_csv(self.dst_gh_equal, sep=",", header=True, index=False)
         logger.info(f"Exported results to: {self.dst_gh_equal}.")
 
-        self.dst_df_gh_optimized.to_csv(self.dst_gh_optimized, sep=",", header=True, index=False)
-        logger.info(f"Exported results to: {self.dst_gh_optimized}.")
+        self.dst_df_gh_independent.to_csv(self.dst_gh_independent, sep=",", header=True, index=False)
+        logger.info(f"Exported results to: {self.dst_gh_independent}.")
 
         self.dst_df_welchs.to_csv(self.dst_welchs, sep=",", header=True, index=False)
         logger.info(f"Exported results to: {self.dst_welchs}.")
@@ -159,7 +159,7 @@ class Regression:
     def games_howell(self) -> None:
         """
         Performs Games-Howell test between each group combination (pairwise) using equally weighted models and
-        regression-optimized models, for each aggregated manoeuvrability indicator.
+        independently weighted models, for each aggregated manoeuvrability indicator.
         """
 
         # Configure groups and group-pair-indicator combinations.
@@ -167,10 +167,10 @@ class Regression:
         groups_indicator_combos = tuple(product(combinations(groups, 2), set(self.dependencies)))
 
         # Iterate model types.
-        for model_type in ("equally weighted", "regression-optimized"):
+        for model_type in ("equally weighted", "independently weighted"):
 
             # Compile models.
-            models = {"equally weighted": self.models_equal, "regression-optimized": self.models_optimized}[model_type]
+            models = {"equally weighted": self.models_equal, "independently weighted": self.models_independent}[model_type]
 
             # Create output DataFrame.
             results = pd.DataFrame({
@@ -220,12 +220,12 @@ class Regression:
             if model_type == "equally weighted":
                 self.dst_df_gh_equal = results.copy(deep=True)
             else:
-                self.dst_df_gh_optimized = results.copy(deep=True)
+                self.dst_df_gh_independent = results.copy(deep=True)
 
     def gen_equations(self, equal_coeff: bool = False) -> pd.DataFrame:
         """
         Creates an equation for each group and aggregated manoeuvrability indicator. Uses OLS regression for equally
-        weighted models and ridge regression for regression-optimized models.
+        weighted models and ridge regression for independently weighted models.
 
         :param bool equal_coeff: Indicates if coefficients are to be equal. Default = False.
         :return pd.DataFrame: DataFrame containing equation components and evaluation metrics.
@@ -257,7 +257,7 @@ class Regression:
                         .sum(axis=1)
                     independent = pd.DataFrame({"independent": independent})
 
-                # Independent variables - regression-optimized.
+                # Independent variables - independently weighted.
                 else:
 
                     # Filter indicators to those that are statistically significant for group.
@@ -281,7 +281,7 @@ class Regression:
                     independent = add_constant(independent)
                     model = OLS(endog=dependent, exog=independent).fit()
 
-                # Regression - regression-optimized.
+                # Regression - independently weighted.
                 else:
 
                     # Create model training and testing data.
@@ -304,7 +304,7 @@ class Regression:
                 if equal_coeff:
                     self.models_equal[group][agg_indicator] = model
                 else:
-                    self.models_optimized[group][agg_indicator] = model
+                    self.models_independent[group][agg_indicator] = model
 
                 # Add equation components to results.
                 flag_record = (results["group"] == group) & (results["agg_indicator"] == agg_indicator)
@@ -323,7 +323,7 @@ class Regression:
                     for name in indicators_:
                         results.loc[flag_record, name] = round(model.params["independent"], 4)
 
-                # Add coefficients - regression-optimized.
+                # Add coefficients - independently weighted.
                 else:
                     for name, coefficient in model.params.items():
                         results.loc[flag_record, name] = round(coefficient, 4)
@@ -332,7 +332,7 @@ class Regression:
 
     def welchs_ttest(self) -> None:
         """
-        Performs Welch's t-test between the equally weighted and regression-optimized models for each group and
+        Performs Welch's t-test between the equally weighted and independently weighted models for each group and
         aggregated manoeuvrability indicator.
         """
 
@@ -353,7 +353,7 @@ class Regression:
 
             # Perform Welch's t-test.
             ttest = ttest_ind(np.abs(self.models_equal[group][agg_indicator].resid),
-                              np.abs(self.models_optimized[group][agg_indicator].resid), equal_var=False)
+                              np.abs(self.models_independent[group][agg_indicator].resid), equal_var=False)
 
             # Store results.
             flag_record = (self.dst_df_welchs["group"] == group) & \
@@ -392,30 +392,30 @@ def main(src: Path, pvalue_slope: Path, pvalue_ground_conditions: Path, pvalue_a
          pvalue_rifle_viewsheds: Path, pvalue_machine_gun_viewsheds: Path) -> None:
     """
     \b
-    Description: Creates a regression-optimized and equally weighted regression model for each group and aggregated
+    Description: Creates an equally weighted and independently weighted regression model for each group and aggregated
     manoeuvrability indicator using multiple linear regression from least-cost path cost values whereby:
         - independent variables: manoeuvrability indicators.
         - dependent variable: aggregated manoeuvrability indicator.
-    The regression-optimized models will use only those indicators that are statistically significant for that group
+    The independently weighted models will use only those indicators that are statistically significant for that group
     and aggregated indicator; equally weighted models will sum all indicators used for the given aggregated indicator
     to produce models with identical coefficients.
 
     \b
     Regression model outputs are used to perform the following:
-        1. Welch's t-test between the equally weighted and regression-optimized models for each group and aggregated
+        1. Welch's t-test between the equally weighted and independently weighted models for each group and aggregated
            manoeuvrability indicator.
         2. Games-Howell Test between each group combination (pairwise) using equally weighted models for each
            aggregated manoeuvrability indicator.
-        3. Games-Howell Test between each group combination (pairwise) using regression-optimized models for each
+        3. Games-Howell Test between each group combination (pairwise) using independently weighted models for each
            aggregated manoeuvrability indicator.
 
     \b
     Output files: Outputs five .csv files within the same directory the source pvalue CSVs:
         1. equations_equally_weighted.csv: Equally weighted equations and evaluation metrics.
-        2. equations_regression_optimized.csv: Regression-optimized equations and evaluation metrics.
+        2. equations_independently_weighted.csv: Independently weighted equations and evaluation metrics.
         3. welchs_ttest.csv: Welch's t-test results.
         4. games_howell_equally_weighted.csv: Games-Howell test results for equally weighted models.
-        5. games_howell_regression_optimized.csv: Games-Howell test results for regression-optimized models.
+        5. games_howell_independently_weighted.csv: Games-Howell test results for independently weighted models.
 
     \b
     Equation output file attributes:
