@@ -170,7 +170,8 @@ class Regression:
         for model_type in ("equally weighted", "independently weighted"):
 
             # Compile models.
-            models = {"equally weighted": self.models_equal, "independently weighted": self.models_independent}[model_type]
+            models = {"equally weighted": self.models_equal,
+                      "independently weighted": self.models_independent}[model_type]
 
             # Create output DataFrame.
             results = pd.DataFrame({
