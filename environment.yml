@@ -1,4 +1,4 @@
-name: dissertation
+name: passchendaele-gis
 channels:
   - conda-forge
 dependencies:
